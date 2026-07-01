@@ -714,7 +714,7 @@ function ProductsScreen({ api }) {
             {suppliers.map(s => <option key={s.id} value={s.id}>{s.fields['Name']}</option>)}
           </select>
           <select value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} style={{ width: '100%' }}>
-            {['KG', 'Box', 'Bag', 'Pack', 'Liter', 'Unit', 'Cup'].map(u => <option key={u} value={u}>{u}</option>)}
+            {['kg', 'gramm', 'box / caja', 'piece / pieza', 'pack / paqueta', 'liter', 'unit', 'barril'].map(u => <option key={u} value={u}>{u}</option>)}
           </select>
           <button onClick={addProduct} disabled={!form.nameEn || saving}
             style={{ background: 'var(--fill-primary)', color: 'var(--on-primary)', border: 'none', padding: '12px' }}>
