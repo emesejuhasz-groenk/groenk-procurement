@@ -133,7 +133,7 @@ function SetupScreen({ onSave }) {
       localStorage.setItem('groenk_token', token.trim());
       onSave(token.trim());
     } catch (e) {
-      setError('Connection failed. Please check your token and try again.');
+      setError('Error: ' + e.message);
     } finally { setTesting(false); }
   }
 
