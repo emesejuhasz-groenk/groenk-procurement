@@ -1,3 +1,4 @@
+EREDETI NAME ENG ÉS ES CSERE ELŐTT 
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -618,7 +619,7 @@ function InvoiceScreen({ api }) {
               const prod = products.find(p => (item.fields['Product'] || []).includes(p.id));
               return (
                 <div key={item.id} style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '12px 14px' }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>{item.fields['Quantity']} × {prod?.fields[‘Name'] || '...'}</div>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>{item.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
                   {item.fields['Delivery Note'] && <div style={{ fontSize: 12, color: 'var(--text-warning)', marginBottom: 8 }}>Note: {item.fields['Delivery Note']}</div>}
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => setMatches(m => ({ ...m, [item.id]: 'Matches' }))}
@@ -676,7 +677,8 @@ function ProductsScreen({ api }) {
     setSaving(true);
     try {
       await api.create('Products', {
-        ‘Name': form.nameEn,
+        'Name': form.nameEn,
+        '': form.nameEs,
         'Supplier': [form.supplierId],
         'Unit': form.unit,
         'Active': true,
@@ -708,13 +710,13 @@ function ProductsScreen({ api }) {
 
       {adding && (
         <div style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '1rem', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <input placeholder=“Name" value={form.nameEn} onChange={e => setForm(f => ({ ...f, nameEn: e.target.value }))} style={{ width: '100%' }} />
+          <input placeholder="Name" value={form.nameEn} onChange={e => setForm(f => ({ ...f, nameEn: e.target.value }))} style={{ width: '100%' }} />
           <input placeholder="" value={form.nameEs} onChange={e => setForm(f => ({ ...f, nameEs: e.target.value }))} style={{ width: '100%' }} />
           <select value={form.supplierId} onChange={e => setForm(f => ({ ...f, supplierId: e.target.value }))} style={{ width: '100%' }}>
             {suppliers.map(s => <option key={s.id} value={s.id}>{s.fields['Name']}</option>)}
           </select>
           <select value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} style={{ width: '100%' }}>
-            {['kg', 'gramm', 'box / caja', 'piece / pieza', 'pack / paqueta', 'liter', 'unit', 'barril'].map(u => <option key={u} value={u}>{u}</option>)}
+            {['kg', 'gramm', 'box/caja', 'piece/pieza', 'pack/paqueta', 'liter', 'unit', 'barril'].map(u => <option key={u} value={u}>{u}</option>)}
           </select>
           <button onClick={addProduct} disabled={!form.nameEn || saving}
             style={{ background: 'var(--fill-primary)', color: 'var(--on-primary)', border: 'none', padding: '12px' }}>
