@@ -472,7 +472,7 @@ function DeliveryScreen({ api }) {
   const sup = order ? suppliers.find(s => s.id === (order.fields['Supplier'] || [])[0]) : null;
   const items = order ? allItems.filter(i => (i.fields['Order'] || []).includes(order.id)) : [];
 
-  const allChecked = items.length > 0 && items.every(i => checks[i.id]);
+ const allChecked = items.length > 0;
 
   async function markDelivered() {
     setSaving(true);
