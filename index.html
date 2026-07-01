@@ -277,7 +277,7 @@ function NewOrderScreen({ user, api }) {
 
   const orderLines = filteredProducts
     .filter(p => quantities[p.id] && Number(quantities[p.id]) > 0)
-    .map(p => `${quantities[p.id]} x ${p.fields['Name (EN)']} (${p.fields['Unit'] || ''})`);
+    .map(p => `${quantities[p.id]} x ${p.fields['Name']} (${p.fields['Unit'] || ''})`);
 
   const today = new Date().toISOString().slice(0,10);
   const message = supplier ? `Order for ${supplier.fields['Name']}\nRestaurant: ${user.restaurant}\nDate: ${today}\nRequested by: ${user.name}\n\n${orderLines.join('\n')}` : '';
@@ -330,7 +330,7 @@ function NewOrderScreen({ user, api }) {
             <div key={p.id} style={{ padding: '12px 14px', background: 'var(--surface-1)', borderRadius: 'var(--radius)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{p.fields['Name (EN)']}</div>
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>{p.fields['Name']}</div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.fields['Name (ES)']} · {p.fields['Unit']}</div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -519,7 +519,7 @@ function DeliveryScreen({ api }) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }} onClick={() => setChecks(c => ({ ...c, [item.id]: !c[item.id] }))}>
                     <input type="checkbox" checked={!!checks[item.id]} readOnly style={{ width: 22, height: 22, minHeight: 22, padding: 0 }} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 500 }}>{item.fields['Quantity']} × {prod?.fields['Name (EN)'] || '...'}</div>
+                      <div style={{ fontSize: 14, fontWeight: 500 }}>{item.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
                       <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{prod?.fields['Name (ES)']}</div>
                     </div>
                     {checks[item.id] && <i className="ti ti-check" style={{ color: 'var(--text-success)', fontSize: 18 }}></i>}
@@ -732,7 +732,7 @@ function ProductsScreen({ api }) {
             <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.3 }}>{s.fields['Name']}</div>
             {ps.map(p => (
               <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '10px', fontSize: 13, borderBottom: '0.5px solid var(--border)', opacity: p.fields['Active'] === false ? 0.4 : 1 }}>
-                <span style={{ minWidth: 0 }}>{p.fields['Name (EN)']} <span style={{ color: 'var(--text-muted)' }}>/ {p.fields['Name (ES)']}</span></span>
+                <span style={{ minWidth: 0 }}>{p.fields['Name']} <span style={{ color: 'var(--text-muted)' }}>/ {p.fields['Name (ES)']}</span></span>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
                   <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.fields['Unit']}</span>
                   <button onClick={() => toggleActive(p)} style={{ fontSize: 11, padding: '4px 8px', minHeight: 28, color: p.fields['Active'] === false ? 'var(--text-success)' : 'var(--text-danger)' }}>
