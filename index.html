@@ -331,7 +331,7 @@ function NewOrderScreen({ user, api }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>{p.fields['Name']}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.fields['Name (ES)']} · {p.fields['Unit']}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.fields['']} · {p.fields['Unit']}</div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                   <button onClick={() => bump(p.id, -1)} style={{ width: 36, height: 36, padding: 0, minHeight: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -520,7 +520,7 @@ function DeliveryScreen({ api }) {
                     <input type="checkbox" checked={!!checks[item.id]} readOnly style={{ width: 22, height: 22, minHeight: 22, padding: 0 }} />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 14, fontWeight: 500 }}>{item.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{prod?.fields['Name (ES)']}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{prod?.fields['']}</div>
                     </div>
                     {checks[item.id] && <i className="ti ti-check" style={{ color: 'var(--text-success)', fontSize: 18 }}></i>}
                   </div>
@@ -618,7 +618,7 @@ function InvoiceScreen({ api }) {
               const prod = products.find(p => (item.fields['Product'] || []).includes(p.id));
               return (
                 <div key={item.id} style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '12px 14px' }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>{item.fields['Quantity']} × {prod?.fields['Name (EN)'] || '...'}</div>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>{item.fields['Quantity']} × {prod?.fields['Product name'] || '...'}</div>
                   {item.fields['Delivery Note'] && <div style={{ fontSize: 12, color: 'var(--text-warning)', marginBottom: 8 }}>Note: {item.fields['Delivery Note']}</div>}
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => setMatches(m => ({ ...m, [item.id]: 'Matches' }))}
@@ -676,8 +676,7 @@ function ProductsScreen({ api }) {
     setSaving(true);
     try {
       await api.create('Products', {
-        'Name (EN)': form.nameEn,
-        'Name (ES)': form.nameEs,
+        'Product name': form.nameEn,
         'Supplier': [form.supplierId],
         'Unit': form.unit,
         'Active': true,
@@ -709,8 +708,8 @@ function ProductsScreen({ api }) {
 
       {adding && (
         <div style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '1rem', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <input placeholder="Name (EN)" value={form.nameEn} onChange={e => setForm(f => ({ ...f, nameEn: e.target.value }))} style={{ width: '100%' }} />
-          <input placeholder="Name (ES)" value={form.nameEs} onChange={e => setForm(f => ({ ...f, nameEs: e.target.value }))} style={{ width: '100%' }} />
+          <input placeholder="Product name" value={form.nameEn} onChange={e => setForm(f => ({ ...f, nameEn: e.target.value }))} style={{ width: '100%' }} />
+          <input placeholder="" value={form.nameEs} onChange={e => setForm(f => ({ ...f, nameEs: e.target.value }))} style={{ width: '100%' }} />
           <select value={form.supplierId} onChange={e => setForm(f => ({ ...f, supplierId: e.target.value }))} style={{ width: '100%' }}>
             {suppliers.map(s => <option key={s.id} value={s.id}>{s.fields['Name']}</option>)}
           </select>
@@ -732,7 +731,7 @@ function ProductsScreen({ api }) {
             <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.3 }}>{s.fields['Name']}</div>
             {ps.map(p => (
               <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '10px', fontSize: 13, borderBottom: '0.5px solid var(--border)', opacity: p.fields['Active'] === false ? 0.4 : 1 }}>
-                <span style={{ minWidth: 0 }}>{p.fields['Name']} <span style={{ color: 'var(--text-muted)' }}>/ {p.fields['Name (ES)']}</span></span>
+                <span style={{ minWidth: 0 }}>{p.fields['Name']} <span style={{ color: 'var(--text-muted)' }}>/ {p.fields['']}</span></span>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
                   <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.fields['Unit']}</span>
                   <button onClick={() => toggleActive(p)} style={{ fontSize: 11, padding: '4px 8px', minHeight: 28, color: p.fields['Active'] === false ? 'var(--text-success)' : 'var(--text-danger)' }}>
