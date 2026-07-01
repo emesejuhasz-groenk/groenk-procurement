@@ -406,7 +406,7 @@ function PendingOrdersScreen({ api }) {
     load();
   }, []);
 
-  const restColors = { 'Sóller': 'amber', 'Deià': 'teal', 'Fornalutx Bistro': 'blue', 'Urban Kitchen': 'gray' };
+  const restColors = { 'Soller - Groenk Pizza': 'amber', 'Deia - Groenk Bistro': 'teal', 'Fornalutx - Groenk Bistro': 'blue', 'Groenk Production Kitchen Fornalutx': 'gray' };
 
   if (loading) return <Loader />;
   if (!orders.length) return <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>No open orders.</div>;
