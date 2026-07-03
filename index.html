@@ -502,7 +502,8 @@ function DeliveryScreen({ api }) {
         <select value={selected || ''} onChange={e => { setSelected(e.target.value); setChecks({}); setNotes({}); }} style={{ width: '100%' }}>
           {orders.map(o => {
             const s = suppliers.find(x => x.id === (o.fields['Supplier'] || [])[0]);
-            return <option key={o.id} value={o.id}>{s?.fields['Name']} – {o.fields['Restaurant']} ({o.fields['Order Date']})</option>;
+            const restColor = {'Soller - Groenk Pizza': '#2196F3', 'Deia - Groenk Bistro': '#F44336', 'Fornalutx - Groenk Bistro': '#4CAF50', 'Groenk Production Kitchen Fornalutx': '#212121'};
+return <option key={o.id} value={o.id} style={{background: restColor[o.fields['Restaurant']] || '#fff', color: '#fff'}}>{s?.fields['Name']} – {o.fields['Restaurant']} ({o.fields['Order Date']})</option>;
           })}
         </select>
       </div>
