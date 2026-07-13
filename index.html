@@ -222,7 +222,7 @@ function SetupScreen({ onSave }) {
   return (
     <div>
       <div className="app-header">
-        <div className="app-header-top">
+       <div className="app-header-top" style={{ position: 'relative', justifyContent: 'center' }}>
           <div><h1>Grøenk</h1><div className="app-subtitle">Procurement</div></div>
         </div>
       </div>
@@ -742,8 +742,10 @@ function App() {
       <div className="app-header">
         <div className="app-header-top">
           <div>
-            <h2>Grøenk Procurement</h2>
-            <div className="app-subtitle">{user.name} · {user.role}{user.restaurant ? ` · ${user.restaurant}` : ''}</div>
+           <div style={{ textAlign: 'center', flex: 1 }}>
+  <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 28, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Grøenk</h1>
+  <div className="app-subtitle" style={{ textAlign: 'center' }}>Procurement · {user.name} · {user.restaurant}</div>
+</div>
           </div>
           <button onClick={() => setUser(null)} style={{ fontSize: 11, padding: '6px 12px', minHeight: 32, background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             Sign out
