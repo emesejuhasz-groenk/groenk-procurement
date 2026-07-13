@@ -8,68 +8,151 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;1,400&family=Josefin+Sans:wght@300;400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   :root {
-    --surface-2: #ffffff;
-    --surface-1: #f5f4f1;
-    --surface-0: #ebeae6;
-    --text-primary: #1a1a18;
-    --text-secondary: #5f5e5a;
-    --text-muted: #888780;
-    --border: #d9d8d3;
-    --border-strong: #b4b2a9;
+    --petrol: #123F46;
+    --petrol-dark: #0a2a2f;
+    --petrol-light: #1a5460;
+    --petrol-muted: #e8f0f1;
+    --cream: #F9F6F0;
+    --cream-dark: #ede9e1;
+    --text-primary: #123F46;
+    --text-secondary: #4a6b6f;
+    --text-muted: #7a9a9e;
+    --border: #c8d8da;
+    --border-strong: #a0bbbe;
     --radius: 10px;
-    --fill-primary: #1a1a18;
-    --on-primary: #ffffff;
-    --fill-disabled: #e5e4e0;
-    --text-disabled: #b4b2a9;
     --bg-success: #EAF3DE;
     --text-success: #27500A;
     --bg-warning: #FAEEDA;
     --text-warning: #633806;
     --bg-danger: #FCEBEB;
     --text-danger: #791F1F;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    font-family: 'Josefin Sans', sans-serif;
   }
-  html, body { margin: 0; padding: 0; background: var(--surface-0); color: var(--text-primary); }
+  html, body { margin: 0; padding: 0; background: var(--cream-dark); color: var(--text-primary); }
   #app-root {
-    max-width: 700px; margin: 0 auto; background: var(--surface-2);
-    min-height: 100vh; padding: 1.25rem 1rem 5rem;
+    max-width: 700px; margin: 0 auto; background: var(--cream);
+    min-height: 100vh; padding: 0 0 5rem;
   }
   @media (min-width: 720px) {
-    body { padding: 2rem 1rem; }
-    #app-root { border-radius: 16px; min-height: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 2rem; }
+    body { padding: 2rem 1rem; background: var(--petrol-dark); }
+    #app-root { border-radius: 16px; min-height: auto; box-shadow: 0 4px 24px rgba(0,0,0,0.2); }
   }
-  input, select, button, textarea {
-    font-family: inherit; font-size: 16px; padding: 12px 14px;
-    border-radius: var(--radius); border: 0.5px solid var(--border-strong);
-    background: var(--surface-2); color: var(--text-primary); min-height: 44px;
+  input, select, textarea {
+    font-family: 'Josefin Sans', sans-serif;
+    font-size: 15px; padding: 12px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-strong);
+    background: #fff;
+    color: var(--text-primary);
+    min-height: 44px;
+    width: 100%;
   }
-  button { cursor: pointer; font-weight: 500; }
-  button:active { transform: scale(0.98); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-  h1, h2 { font-weight: 500; }
-  h1 { font-size: 22px; } h2 { font-size: 18px; }
-  .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--text-primary); border-radius: 50%; animation: spin 0.7s linear infinite; }
+  input:focus, select:focus { outline: 2px solid var(--petrol); border-color: var(--petrol); }
+  button {
+    font-family: 'Josefin Sans', sans-serif;
+    font-size: 14px; cursor: pointer; font-weight: 600;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    border-radius: var(--radius); min-height: 44px;
+    border: 1.5px solid var(--border-strong);
+    background: #fff; color: var(--text-primary);
+    padding: 10px 16px;
+    transition: all 0.15s ease;
+  }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  h1 { font-family: 'Fraunces', serif; font-weight: 600; font-size: 26px; color: #fff; margin: 0; }
+  h2 { font-family: 'Fraunces', serif; font-weight: 600; font-size: 20px; color: #fff; margin: 0; }
+  .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; }
+  .spinner-dark { border-color: rgba(18,63,70,0.2); border-top-color: var(--petrol); }
   @keyframes spin { to { transform: rotate(360deg); } }
-  ::-webkit-scrollbar { display: none; }
+
+  /* Header */
+  .app-header {
+    background: var(--petrol);
+    padding: 1.25rem 1.25rem 1rem;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .app-header-top {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;
+  }
+  .app-subtitle { font-size: 12px; color: rgba(255,255,255,0.6); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
+
+  /* Nav */
+  .nav-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+  .nav-scroll::-webkit-scrollbar { display: none; }
+  .nav-btn {
+    display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+    background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.7);
+    border: 1px solid rgba(255,255,255,0.2);
+    padding: 8px 14px; font-size: 12px; min-height: 36px;
+    border-radius: 20px; text-transform: uppercase; letter-spacing: 0.06em;
+    transition: all 0.15s;
+  }
+  .nav-btn.active {
+    background: #fff; color: var(--petrol);
+    border-color: #fff; font-weight: 600;
+  }
+
+  /* Content */
+  .content { padding: 1.25rem; }
+
+  /* Cards */
+  .card {
+    background: #fff; border-radius: 12px;
+    border: 1px solid var(--border);
+    padding: 1rem 1.1rem; margin-bottom: 10px;
+  }
+  .card-muted { background: var(--cream); }
+
+  /* Buttons */
+  .btn-primary {
+    background: var(--petrol); color: #fff;
+    border-color: var(--petrol); width: 100%; padding: 14px;
+  }
+  .btn-primary:hover { background: var(--petrol-light); }
+  .btn-whatsapp { background: #25D366; color: #fff; border-color: #25D366; width: 100%; padding: 13px; }
+  .btn-secondary { background: #fff; color: var(--petrol); border-color: var(--border-strong); width: 100%; padding: 13px; }
+  .btn-ghost { background: transparent; border: none; color: var(--text-muted); font-size: 12px; }
+  .btn-disabled { background: var(--cream-dark); color: var(--text-muted); border-color: var(--border); width: 100%; padding: 14px; cursor: not-allowed; }
+
+  /* Section label */
+  .section-label { font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+
+  /* Badge */
+  .badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; display: inline-block; white-space: nowrap; letter-spacing: 0.04em; text-transform: uppercase; }
+
+  /* Product row */
+  .product-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; background: var(--cream); border-radius: var(--radius); margin-bottom: 6px; }
+  .product-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .product-unit { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .qty-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .qty-btn { width: 34px; height: 34px; padding: 0; min-height: 34px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--petrol); color: #fff; border-color: var(--petrol); }
+  .qty-input { width: 46px; text-align: center; padding: 6px 4px; min-height: 34px; font-size: 15px; font-weight: 600; border-radius: 8px; }
 </style>
 </head>
 <body>
 <div id="app-root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useCallback } = React;
-
+const { useState, useEffect } = React;
 const BASE_ID = 'appPcdy4HEJuDOF4j';
 const RESTAURANTS = ['Soller - Groenk Pizza', 'Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Groenk Production Kitchen Fornalutx'];
+const REST_COLORS = {
+  'Soller - Groenk Pizza': { bg: '#DDEEFF', text: '#1a3a6e' },
+  'Deia - Groenk Bistro': { bg: '#FCE4D6', text: '#7B2D00' },
+  'Fornalutx - Groenk Bistro': { bg: '#EAF3DE', text: '#27500A' },
+  'Groenk Production Kitchen Fornalutx': { bg: '#E8E8E8', text: '#333' },
+};
 
-// ─── AIRTABLE API ────────────────────────────────────────────────────
 function airtable(token) {
   const base = `https://api.airtable.com/v0/${BASE_ID}`;
   const h = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-
   async function getAll(table) {
     let records = [], offset = null;
     do {
@@ -77,170 +160,131 @@ function airtable(token) {
       const r = await fetch(url, { headers: h });
       const d = await r.json();
       if (d.error) throw new Error(d.error.message);
-      records = records.concat(d.records);
-      offset = d.offset;
+      records = records.concat(d.records); offset = d.offset;
     } while (offset);
     return records;
   }
-
   async function create(table, fields) {
-    const r = await fetch(`${base}/${encodeURIComponent(table)}`, {
-      method: 'POST', headers: h, body: JSON.stringify({ records: [{ fields }] })
-    });
+    const r = await fetch(`${base}/${encodeURIComponent(table)}`, { method: 'POST', headers: h, body: JSON.stringify({ records: [{ fields }] }) });
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
     return d.records[0];
   }
-
   async function update(table, id, fields) {
-    const r = await fetch(`${base}/${encodeURIComponent(table)}/${id}`, {
-      method: 'PATCH', headers: h, body: JSON.stringify({ fields })
-    });
+    const r = await fetch(`${base}/${encodeURIComponent(table)}/${id}`, { method: 'PATCH', headers: h, body: JSON.stringify({ fields }) });
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
     return d;
   }
-
   async function createMany(table, fieldsArray) {
     const chunks = [];
     for (let i = 0; i < fieldsArray.length; i += 10) chunks.push(fieldsArray.slice(i, i + 10));
     const results = [];
     for (const chunk of chunks) {
-      const r = await fetch(`${base}/${encodeURIComponent(table)}`, {
-        method: 'POST', headers: h,
-        body: JSON.stringify({ records: chunk.map(f => ({ fields: f })) })
-      });
+      const r = await fetch(`${base}/${encodeURIComponent(table)}`, { method: 'POST', headers: h, body: JSON.stringify({ records: chunk.map(f => ({ fields: f })) }) });
       const d = await r.json();
       if (d.error) throw new Error(d.error.message);
       results.push(...d.records);
     }
     return results;
   }
-
   return { getAll, create, update, createMany };
 }
 
-// ─── SETUP SCREEN ────────────────────────────────────────────────────
+function Badge({ children, color }) {
+  const c = REST_COLORS[children] || { bg: '#eee', text: '#555' };
+  const presets = {
+    amber: { bg: '#FAEEDA', text: '#633806' },
+    teal: { bg: '#EAF3DE', text: '#27500A' },
+    gray: { bg: '#eee', text: '#555' },
+  };
+  const style = color ? (presets[color] || presets.gray) : c;
+  return <span className="badge" style={{ background: style.bg, color: style.text }}>{children}</span>;
+}
+
+function Loader() {
+  return <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner spinner-dark"></span></div>;
+}
+
 function SetupScreen({ onSave }) {
   const [token, setToken] = useState('');
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
-
   async function test() {
     setTesting(true); setError('');
     try {
-      const api = airtable(token.trim());
-      await api.getAll('Suppliers');
+      await airtable(token.trim()).getAll('Suppliers');
       localStorage.setItem('groenk_token', token.trim());
       onSave(token.trim());
-    } catch (e) {
-      setError('Error: ' + e.message);
-    } finally { setTesting(false); }
+    } catch(e) { setError('Error: ' + e.message); }
+    finally { setTesting(false); }
   }
-
   return (
-    <div style={{ maxWidth: 420, margin: '2rem auto' }}>
-      <h1 style={{ marginBottom: 4 }}>Grøenk Procurement</h1>
-      <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: '2rem' }}>
-        Enter your Airtable Personal Access Token to connect the app to your database.
-        This is stored only on this device.
-      </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <input type="password" placeholder="Paste your token here..." value={token}
-          onChange={e => setToken(e.target.value)} style={{ width: '100%' }} />
-        {error && <div style={{ color: 'var(--text-danger)', fontSize: 13 }}>{error}</div>}
-        <button onClick={test} disabled={!token || testing}
-          style={{ background: 'var(--fill-primary)', color: 'var(--on-primary)', border: 'none', padding: '14px' }}>
-          {testing ? <span className="spinner"></span> : 'Connect to Airtable'}
-        </button>
+    <div>
+      <div className="app-header">
+        <div className="app-header-top">
+          <div><h1>Grøenk</h1><div className="app-subtitle">Procurement</div></div>
+        </div>
       </div>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: '1.5rem' }}>
-        Your token is stored locally on this device only and never sent to any server other than Airtable.
-      </p>
+      <div className="content" style={{ maxWidth: 420, margin: '2rem auto' }}>
+        <div className="section-label" style={{ marginBottom: 16 }}>Connect to Airtable</div>
+        <p style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+          Enter your Airtable Personal Access Token. Stored only on this device.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input type="password" placeholder="Paste your token here..." value={token} onChange={e => setToken(e.target.value)} />
+          {error && <div style={{ color: 'var(--text-danger)', fontSize: 13 }}>{error}</div>}
+          <button className="btn-primary" onClick={test} disabled={!token || testing}>
+            {testing ? <span className="spinner"></span> : 'Connect to Airtable'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ─── LOGIN SCREEN ─────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState('kitchen');
   const [restaurant, setRestaurant] = useState(RESTAURANTS[0]);
-
   return (
-    <div style={{ maxWidth: 380, margin: '1rem auto', textAlign: 'center' }}>
-      <h1 style={{ marginBottom: 4 }}>Grøenk Procurement</h1>
-      <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: '2rem' }}>Sign in to manage orders</p>
-      <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div>
-          <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Your name</label>
-          <input type="text" placeholder="e.g. Maria" value={name} onChange={e => setName(e.target.value)} style={{ width: '100%' }} />
+    <div>
+      <div className="app-header">
+        <div className="app-header-top">
+          <div><h1>Grøenk</h1><div className="app-subtitle">Procurement</div></div>
         </div>
-        <div>
-          <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Role</label>
-          <select value={role} onChange={e => setRole(e.target.value)} style={{ width: '100%' }}>
-            <option value="kitchen">Kitchen staff</option>
-            <option value="manager">Manager</option>
-            <option value="admin">Admin</option>
-          </select>
-        </div>
-        {(role === 'kitchen' || role === 'admin') && (
+      </div>
+      <div className="content" style={{ maxWidth: 380, margin: '1rem auto' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
-            <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Restaurant</label>
-            <select value={restaurant} onChange={e => setRestaurant(e.target.value)} style={{ width: '100%' }}>
-              {RESTAURANTS.map(r => <option key={r} value={r}>{r}</option>)}
+            <div className="section-label">Your name</div>
+            <input type="text" placeholder="e.g. Maria" value={name} onChange={e => setName(e.target.value)} />
+          </div>
+          <div>
+            <div className="section-label">Role</div>
+            <select value={role} onChange={e => setRole(e.target.value)}>
+              <option value="kitchen">Kitchen staff</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
             </select>
           </div>
-        )}
-        <button onClick={() => onLogin(name || 'Guest', role, restaurant)}
-          style={{ marginTop: 8, background: 'var(--fill-primary)', color: 'var(--on-primary)', border: 'none', fontWeight: 500, padding: '14px' }}>
-          Sign in
-        </button>
+          {(role === 'kitchen' || role === 'admin') && (
+            <div>
+              <div className="section-label">Restaurant</div>
+              <select value={restaurant} onChange={e => setRestaurant(e.target.value)}>
+                {RESTAURANTS.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          )}
+          <button className="btn-primary" style={{ marginTop: 8 }} onClick={() => onLogin(name || 'Guest', role, restaurant)}>
+            Sign in
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// ─── NAV TABS ────────────────────────────────────────────────────────
-function NavTabs({ active, setActive, role }) {
-  const tabs = [
-    { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin'] },
-    { id: 'pending', label: 'Open orders', icon: 'ti-clock', roles: ['kitchen', 'admin', 'manager'] },
-    { id: 'delivery', label: 'Receive goods', icon: 'ti-truck', roles: ['kitchen', 'admin'] },
-    { id: 'invoice', label: 'Check invoice', icon: 'ti-file-check', roles: ['manager', 'admin'] },
-    { id: 'products', label: 'Products', icon: 'ti-list', roles: ['admin'] },
-  ];
-  return (
-    <div style={{ display: 'flex', gap: 8, marginBottom: '1.25rem', overflowX: 'auto', paddingBottom: 4 }}>
-      {tabs.filter(t => t.roles.includes(role)).map(t => (
-        <button key={t.id} onClick={() => setActive(t.id)}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-            background: active === t.id ? 'var(--fill-primary)' : 'var(--surface-1)',
-            color: active === t.id ? 'var(--on-primary)' : 'var(--text-primary)',
-            border: 'none', padding: '10px 16px', fontSize: 13, minHeight: 40 }}>
-          <i className={`ti ${t.icon}`} style={{ fontSize: 16 }}></i>{t.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Badge({ children, color }) {
-  const colors = {
-    amber: { bg: 'var(--bg-warning)', text: 'var(--text-warning)' },
-    teal: { bg: 'var(--bg-success)', text: 'var(--text-success)' },
-    blue: { bg: '#DDEEFF', text: '#1a3a6e' },
-    gray: { bg: 'var(--surface-1)', text: 'var(--text-secondary)' },
-  };
-  const c = colors[color] || colors.gray;
-  return <span style={{ background: c.bg, color: c.text, fontSize: 11, fontWeight: 500, padding: '3px 9px', borderRadius: 'var(--radius)', display: 'inline-block', whiteSpace: 'nowrap' }}>{children}</span>;
-}
-
-function Loader() {
-  return <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}><span className="spinner"></span></div>;
-}
-
-// ─── NEW ORDER ───────────────────────────────────────────────────────
 function NewOrderScreen({ user, api }) {
   const [suppliers, setSuppliers] = useState([]);
   const [products, setProducts] = useState([]);
@@ -258,28 +302,20 @@ function NewOrderScreen({ user, api }) {
         setSuppliers(sups);
         setProducts(prods.filter(p => p.fields['Active'] !== false));
         if (sups.length) setSupplierId(sups[0].id);
-      } catch(e) { alert('Error loading data: ' + e.message); }
+      } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
     }
     load();
   }, []);
 
   const supplier = suppliers.find(s => s.id === supplierId);
-  const filteredProducts = products.filter(p => {
-    const links = p.fields['Supplier'];
-    return links && links.includes(supplierId);
-  });
-
+  const filteredProducts = products.filter(p => (p.fields['Supplier'] || []).includes(supplierId));
   const bump = (pid, delta) => {
-    const cur = Number(quantities[pid] || 0);
-    const next = Math.max(0, cur + delta);
+    const next = Math.max(0, Number(quantities[pid] || 0) + delta);
     setQuantities(q => ({ ...q, [pid]: next === 0 ? '' : String(next) }));
   };
-
-  const orderLines = filteredProducts
-    .filter(p => quantities[p.id] && Number(quantities[p.id]) > 0)
+  const orderLines = filteredProducts.filter(p => quantities[p.id] && Number(quantities[p.id]) > 0)
     .map(p => `${quantities[p.id]} x ${p.fields['Name']} (${p.fields['Unit'] || ''})`);
-
   const today = new Date().toISOString().slice(0,10);
   const message = supplier ? `Order for ${supplier.fields['Name']}\nRestaurant: ${user.restaurant}\nDate: ${today}\nRequested by: ${user.name}\n\n${orderLines.join('\n')}` : '';
 
@@ -287,64 +323,40 @@ function NewOrderScreen({ user, api }) {
     if (!orderLines.length) return;
     setSaving(true);
     try {
-      const order = await api.create('Orders', {
-        'Order Date': today,
-        'Supplier': [supplierId],
-        'Restaurant': user.restaurant,
-        'Status': 'Pending',
-        'Created By': user.name,
-      });
-      const items = filteredProducts
-        .filter(p => quantities[p.id] && Number(quantities[p.id]) > 0)
-        .map(p => ({
-          'Order': [order.id],
-          'Product': [p.id],
-          'Quantity': Number(quantities[p.id]),
-          'Received': false,
-          'Invoice Match': 'Pending Review',
-        }));
-      await api.createMany('Order Items', items);
-      setOrderText(message);
-      setQuantities({});
-    } catch(e) { alert('Error saving order: ' + e.message); }
+      const order = await api.create('Orders', { 'Order Date': today, 'Supplier': [supplierId], 'Restaurant': user.restaurant, 'Status': 'Pending', 'Created By': user.name });
+      await api.createMany('Order Items', filteredProducts.filter(p => quantities[p.id] && Number(quantities[p.id]) > 0)
+        .map(p => ({ 'Order': [order.id], 'Product': [p.id], 'Quantity': Number(quantities[p.id]), 'Received': false, 'Invoice Match': 'Pending Review' })));
+      setOrderText(message); setQuantities({});
+    } catch(e) { alert('Error: ' + e.message); }
     finally { setSaving(false); }
   }
 
-  if (loading) return <Loader />;
-
+  if (loading) return <div className="content"><Loader /></div>;
   return (
-    <div>
+    <div className="content">
       <div style={{ marginBottom: '1.25rem' }}>
-        <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Supplier</label>
-        <select value={supplierId} onChange={e => { setSupplierId(e.target.value); setQuantities({}); setSent(null); setOrderText(''); }} style={{ width: '100%' }}>
+        <div className="section-label">Supplier</div>
+        <select value={supplierId} onChange={e => { setSupplierId(e.target.value); setQuantities({}); setSent(null); setOrderText(''); }}>
           {suppliers.map(s => <option key={s.id} value={s.id}>{s.fields['Name']}</option>)}
         </select>
       </div>
 
       {filteredProducts.length === 0 ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: 14, padding: '1rem', background: 'var(--surface-1)', borderRadius: 'var(--radius)', textAlign: 'center' }}>
-          No products found for this supplier.<br/>Add products in Airtable and link them to this supplier.
+        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: 14 }}>
+          No products for this supplier.<br/>Add them in Airtable.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div>
           {filteredProducts.map(p => (
-            <div key={p.id} style={{ padding: '12px 14px', background: 'var(--surface-1)', borderRadius: 'var(--radius)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{p.fields['Name']}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.fields['']} · {p.fields['Unit']}</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                  <button onClick={() => bump(p.id, -1)} style={{ width: 36, height: 36, padding: 0, minHeight: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="ti ti-minus" style={{ fontSize: 14 }}></i>
-                  </button>
-                  <input type="number" min="0" inputMode="numeric" placeholder="0" value={quantities[p.id] || ''}
-                    onChange={e => setQuantities(q => ({ ...q, [p.id]: e.target.value }))}
-                    style={{ width: 50, textAlign: 'center', padding: '8px 4px', minHeight: 36 }} />
-                  <button onClick={() => bump(p.id, 1)} style={{ width: 36, height: 36, padding: 0, minHeight: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="ti ti-plus" style={{ fontSize: 14 }}></i>
-                  </button>
-                </div>
+            <div key={p.id} className="product-row">
+              <div>
+                <div className="product-name">{p.fields['Name']}</div>
+                <div className="product-unit">{p.fields['Unit']}</div>
+              </div>
+              <div className="qty-controls">
+                <button className="qty-btn" onClick={() => bump(p.id, -1)}><i className="ti ti-minus" style={{ fontSize: 14 }}></i></button>
+                <input type="number" min="0" inputMode="numeric" placeholder="0" value={quantities[p.id] || ''} onChange={e => setQuantities(q => ({ ...q, [p.id]: e.target.value }))} className="qty-input" />
+                <button className="qty-btn" onClick={() => bump(p.id, 1)}><i className="ti ti-plus" style={{ fontSize: 14 }}></i></button>
               </div>
             </div>
           ))}
@@ -352,32 +364,30 @@ function NewOrderScreen({ user, api }) {
       )}
 
       {orderLines.length > 0 && !orderText && (
-        <button onClick={saveOrder} disabled={saving}
-          style={{ marginTop: '1.25rem', width: '100%', background: 'var(--fill-primary)', color: 'var(--on-primary)', border: 'none', padding: '14px' }}>
+        <button className="btn-primary" style={{ marginTop: '1.25rem' }} onClick={saveOrder} disabled={saving}>
           {saving ? <span className="spinner"></span> : 'Save & prepare to send'}
         </button>
       )}
 
       {orderText && (
-        <div style={{ marginTop: '1.5rem', background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '1rem' }}>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>✓ Order saved. Send it:</div>
-          <pre style={{ fontSize: 13, fontFamily: 'inherit', whiteSpace: 'pre-wrap', margin: '0 0 14px', wordBreak: 'break-word', background: 'var(--surface-2)', padding: 10, borderRadius: 8 }}>{orderText}</pre>
+        <div className="card" style={{ marginTop: '1.5rem' }}>
+          <div className="section-label" style={{ marginBottom: 10 }}>✓ Order saved — send it:</div>
+          <pre style={{ fontSize: 13, fontFamily: 'inherit', whiteSpace: 'pre-wrap', margin: '0 0 14px', wordBreak: 'break-word', background: 'var(--cream)', padding: 12, borderRadius: 8, color: 'var(--text-primary)' }}>{orderText}</pre>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <a href={`https://wa.me/?text=${encodeURIComponent(orderText)}`} target="_blank"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#25D366', color: '#fff', border: 'none', padding: '12px', borderRadius: 'var(--radius)', fontWeight: 500, textDecoration: 'none', fontSize: 16, minHeight: 44 }}>
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#25D366', color: '#fff', padding: '13px', borderRadius: 'var(--radius)', fontWeight: 600, textDecoration: 'none', fontSize: 14, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
               <i className="ti ti-brand-whatsapp" style={{ fontSize: 18 }}></i>Send via WhatsApp
             </a>
             <a href={`mailto:?subject=Order for ${supplier?.fields['Name']}&body=${encodeURIComponent(orderText)}`}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'var(--surface-2)', color: 'var(--text-primary)', border: '0.5px solid var(--border-strong)', padding: '12px', borderRadius: 'var(--radius)', fontWeight: 500, textDecoration: 'none', fontSize: 16, minHeight: 44 }}>
-              <i className="ti ti-mail" style={{ fontSize: 17 }}></i>Send via email
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#fff', color: 'var(--petrol)', border: '1.5px solid var(--border-strong)', padding: '13px', borderRadius: 'var(--radius)', fontWeight: 600, textDecoration: 'none', fontSize: 14, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+              <i className="ti ti-mail" style={{ fontSize: 17 }}></i>Send via Email
             </a>
             <button onClick={() => { navigator.clipboard?.writeText(orderText); setSent('copy'); }}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#fff', border: '1.5px solid var(--border-strong)', color: 'var(--petrol)' }}>
               <i className="ti ti-copy" style={{ fontSize: 16 }}></i>{sent === 'copy' ? 'Copied!' : 'Copy text'}
             </button>
           </div>
-          <button onClick={() => setOrderText('')}
-            style={{ marginTop: 12, width: '100%', fontSize: 13, background: 'transparent', border: 'none', color: 'var(--text-muted)' }}>
+          <button className="btn-ghost" style={{ marginTop: 12, width: '100%' }} onClick={() => setOrderText('')}>
             + New order for another supplier
           </button>
         </div>
@@ -386,52 +396,52 @@ function NewOrderScreen({ user, api }) {
   );
 }
 
-// ─── OPEN ORDERS ─────────────────────────────────────────────────────
 function PendingOrdersScreen({ api }) {
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [items, setItems] = useState([]);
+  const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       try {
-        const [o, s, i] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items')]);
-        setOrders(o.filter(x => x.fields['Status'] !== 'Closed').sort((a,b) => b.fields['Order Date']?.localeCompare(a.fields['Order Date'] || '') || 0));
-        setSuppliers(s);
-        setItems(i);
+        const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
+        setOrders(o.filter(x => x.fields['Status'] !== 'Closed').sort((a,b) => (b.fields['Order Date'] || '').localeCompare(a.fields['Order Date'] || '')));
+        setSuppliers(s); setItems(i); setProducts(p);
       } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
     }
     load();
   }, []);
 
-  const restColors = { 'Soller - Groenk Pizza': 'amber', 'Deia - Groenk Bistro': 'teal', 'Fornalutx - Groenk Bistro': 'blue', 'Groenk Production Kitchen Fornalutx': 'gray' };
-
-  if (loading) return <Loader />;
-  if (!orders.length) return <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>No open orders.</div>;
+  if (loading) return <div className="content"><Loader /></div>;
+  if (!orders.length) return <div className="content" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>No open orders.</div>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className="content">
       {orders.map(o => {
         const sup = suppliers.find(s => s.id === (o.fields['Supplier'] || [])[0]);
         const oItems = items.filter(i => (i.fields['Order'] || []).includes(o.id));
-        const statusColor = o.fields['Status'] === 'Pending' ? 'amber' : 'teal';
+        const rc = REST_COLORS[o.fields['Restaurant']] || { bg: '#eee', text: '#555' };
         return (
-          <div key={o.id} style={{ background: 'var(--surface-2)', border: '0.5px solid var(--border)', borderRadius: 12, padding: '1rem 1.1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 8 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 500, fontSize: 14 }}>{sup?.fields['Name'] || 'Unknown supplier'}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.fields['Order Date']} · {o.fields['Created By']}</div>
-                <div style={{ marginTop: 4 }}>
-                  <Badge color={restColors[o.fields['Restaurant']] || 'gray'}>{o.fields['Restaurant']}</Badge>
-                  {' '}<Badge color={statusColor}>{o.fields['Status']}</Badge>
+          <div key={o.id} className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 8 }}>
+              <div>
+                <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, fontSize: 16, color: 'var(--petrol)' }}>{sup?.fields['Name'] || 'Unknown'}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{o.fields['Order Date']} · {o.fields['Created By']}</div>
+                <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <span className="badge" style={{ background: rc.bg, color: rc.text }}>{o.fields['Restaurant']}</span>
+                  <Badge color={o.fields['Status'] === 'Pending' ? 'amber' : 'teal'}>{o.fields['Status']}</Badge>
                 </div>
               </div>
             </div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', borderTop: '0.5px solid var(--border)', paddingTop: 8 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
               {oItems.length === 0 ? <span style={{ color: 'var(--text-muted)' }}>No items</span> :
-                oItems.map((it, i) => <div key={i} style={{ padding: '2px 0' }}>{it.fields['Quantity']} × (loading product...)</div>)}
+                oItems.map((it, i) => {
+                  const prod = products.find(p => (it.fields['Product'] || []).includes(p.id));
+                  return <div key={i} style={{ padding: '2px 0' }}>{it.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>;
+                })}
             </div>
           </div>
         );
@@ -440,7 +450,6 @@ function PendingOrdersScreen({ api }) {
   );
 }
 
-// ─── RECEIVE GOODS ───────────────────────────────────────────────────
 function DeliveryScreen({ api }) {
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
@@ -458,10 +467,7 @@ function DeliveryScreen({ api }) {
       try {
         const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
         const pending = o.filter(x => x.fields['Status'] === 'Pending');
-        setOrders(pending);
-        setSuppliers(s);
-        setAllItems(i);
-        setProducts(p);
+        setOrders(pending); setSuppliers(s); setAllItems(i); setProducts(p);
         if (pending.length) setSelected(pending[0].id);
       } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
@@ -473,74 +479,67 @@ function DeliveryScreen({ api }) {
   const sup = order ? suppliers.find(s => s.id === (order.fields['Supplier'] || [])[0]) : null;
   const items = order ? allItems.filter(i => (i.fields['Order'] || []).includes(order.id)) : [];
 
- const allChecked = items.length > 0;
-
   async function markDelivered() {
     setSaving(true);
     try {
       for (const item of items) {
-        await api.update('Order Items', item.id, {
-          'Received': !!checks[item.id],
-          'Delivery Note': notes[item.id] || '',
-        });
+        await api.update('Order Items', item.id, { 'Received': !!checks[item.id], 'Delivery Note': notes[item.id] || '' });
       }
       await api.update('Orders', order.id, { 'Status': 'Delivered', 'Delivery Date': new Date().toISOString().slice(0,10) });
       setOrders(o => o.filter(x => x.id !== order.id));
-      setSelected(orders.find(o => o.id !== order.id)?.id || null);
-      setChecks({}); setNotes({});
+      setSelected(null); setChecks({}); setNotes({});
     } catch(e) { alert('Error: ' + e.message); }
     finally { setSaving(false); }
   }
 
-  if (loading) return <Loader />;
-  if (!orders.length) return <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>No pending deliveries.</div>;
+  if (loading) return <div className="content"><Loader /></div>;
+  if (!orders.length) return <div className="content" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>No pending deliveries.</div>;
+
+  const rc = order ? (REST_COLORS[order.fields['Restaurant']] || { bg: '#eee', text: '#555' }) : {};
 
   return (
-    <div>
+    <div className="content">
       <div style={{ marginBottom: '1rem' }}>
-        <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Select order to receive</label>
-        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setChecks({}); setNotes({}); }} style={{ width: '100%' }}>
+        <div className="section-label">Select order</div>
+        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setChecks({}); setNotes({}); }}>
           {orders.map(o => {
             const s = suppliers.find(x => x.id === (o.fields['Supplier'] || [])[0]);
-            const restColor = {'Soller - Groenk Pizza': '#2196F3', 'Deia - Groenk Bistro': '#F44336', 'Fornalutx - Groenk Bistro': '#4CAF50', 'Groenk Production Kitchen Fornalutx': '#212121'};
-return <option key={o.id} value={o.id} style={{background: restColor[o.fields['Restaurant']] || '#fff', color: '#fff'}}>{s?.fields['Name']} – {o.fields['Restaurant']} ({o.fields['Order Date']})</option>;
+            return <option key={o.id} value={o.id}>{s?.fields['Name']} – {o.fields['Restaurant']} ({o.fields['Order Date']})</option>;
           })}
         </select>
       </div>
-
       {order && (
         <>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-            {sup?.fields['Name']} · {order.fields['Restaurant']} · ordered by {order.fields['Created By']}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14 }}>
+            <span className="badge" style={{ background: rc.bg, color: rc.text }}>{order.fields['Restaurant']}</span>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>by {order.fields['Created By']}</span>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div>
             {items.map(item => {
               const prod = products.find(p => (item.fields['Product'] || []).includes(p.id));
               return (
-                <div key={item.id} style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '12px 14px' }}>
+                <div key={item.id} className="card card-muted" style={{ marginBottom: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }} onClick={() => setChecks(c => ({ ...c, [item.id]: !c[item.id] }))}>
-                    <input type="checkbox" checked={!!checks[item.id]} readOnly style={{ width: 22, height: 22, minHeight: 22, padding: 0 }} />
+                    <input type="checkbox" checked={!!checks[item.id]} readOnly style={{ width: 22, height: 22, minHeight: 22, padding: 0, accentColor: 'var(--petrol)' }} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 500 }}>{item.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{prod?.fields['']}</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: checks[item.id] ? 'var(--text-muted)' : 'var(--petrol)', textDecoration: checks[item.id] ? 'line-through' : 'none' }}>
+                        {item.fields['Quantity']} × {prod?.fields['Name'] || '...'}
+                      </div>
                     </div>
-                    {checks[item.id] && <i className="ti ti-check" style={{ color: 'var(--text-success)', fontSize: 18 }}></i>}
+                    {checks[item.id] && <i className="ti ti-check" style={{ color: 'var(--text-success)', fontSize: 20 }}></i>}
                   </div>
                   <button onClick={() => setOpenNote(openNote === item.id ? null : item.id)}
-                    style={{ marginTop: 8, fontSize: 12, padding: '6px 10px', minHeight: 32, color: 'var(--text-secondary)', background: 'transparent', border: 'none' }}>
+                    style={{ marginTop: 8, fontSize: 12, padding: '4px 8px', minHeight: 28, color: notes[item.id] ? 'var(--text-warning)' : 'var(--text-muted)', background: 'transparent', border: 'none', textTransform: 'none', letterSpacing: 0 }}>
                     {notes[item.id] ? `📝 ${notes[item.id]}` : '+ Add note'}
                   </button>
                   {openNote === item.id && (
-                    <input type="text" placeholder="What's the issue?" value={notes[item.id] || ''}
-                      onChange={e => setNotes(n => ({ ...n, [item.id]: e.target.value }))}
-                      style={{ width: '100%', marginTop: 6, fontSize: 14 }} autoFocus />
+                    <input type="text" placeholder="What's the issue?" value={notes[item.id] || ''} onChange={e => setNotes(n => ({ ...n, [item.id]: e.target.value }))} style={{ marginTop: 6, fontSize: 14 }} autoFocus />
                   )}
                 </div>
               );
             })}
           </div>
-          <button onClick={markDelivered} disabled={!allChecked || saving}
-            style={{ marginTop: '1.25rem', width: '100%', background: allChecked ? 'var(--fill-primary)' : 'var(--fill-disabled)', color: allChecked ? 'var(--on-primary)' : 'var(--text-disabled)', border: 'none', padding: '14px' }}>
+          <button className="btn-primary" style={{ marginTop: '1.25rem' }} onClick={markDelivered} disabled={saving}>
             {saving ? <span className="spinner"></span> : 'Mark delivery complete'}
           </button>
         </>
@@ -549,7 +548,6 @@ return <option key={o.id} value={o.id} style={{background: restColor[o.fields['R
   );
 }
 
-// ─── CHECK INVOICE ───────────────────────────────────────────────────
 function InvoiceScreen({ api }) {
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
@@ -565,10 +563,7 @@ function InvoiceScreen({ api }) {
       try {
         const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
         const delivered = o.filter(x => x.fields['Status'] === 'Delivered');
-        setOrders(delivered);
-        setSuppliers(s);
-        setAllItems(i);
-        setProducts(p);
+        setOrders(delivered); setSuppliers(s); setAllItems(i); setProducts(p);
         if (delivered.length) setSelected(delivered[0].id);
       } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
@@ -581,60 +576,50 @@ function InvoiceScreen({ api }) {
   const items = order ? allItems.filter(i => (i.fields['Order'] || []).includes(order.id)) : [];
   const allReviewed = items.length > 0 && items.every(i => matches[i.id]);
 
-  async function closeOrder(user) {
+  async function closeOrder() {
     setSaving(true);
     try {
-      for (const item of items) {
-        await api.update('Order Items', item.id, { 'Invoice Match': matches[item.id] || 'Pending Review' });
-      }
+      for (const item of items) await api.update('Order Items', item.id, { 'Invoice Match': matches[item.id] || 'Pending Review' });
       await api.update('Orders', order.id, { 'Status': 'Closed' });
       setOrders(o => o.filter(x => x.id !== order.id));
-      setSelected(orders.find(o => o.id !== order.id)?.id || null);
-      setMatches({});
+      setSelected(null); setMatches({});
     } catch(e) { alert('Error: ' + e.message); }
     finally { setSaving(false); }
   }
 
-  if (loading) return <Loader />;
-  if (!orders.length) return <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>No orders pending invoice check.</div>;
+  if (loading) return <div className="content"><Loader /></div>;
+  if (!orders.length) return <div className="content" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>No orders pending invoice check.</div>;
 
   return (
-    <div>
+    <div className="content">
       <div style={{ marginBottom: '1rem' }}>
-        <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Select order</label>
-        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setMatches({}); }} style={{ width: '100%' }}>
+        <div className="section-label">Select order</div>
+        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setMatches({}); }}>
           {orders.map(o => {
             const s = suppliers.find(x => x.id === (o.fields['Supplier'] || [])[0]);
             return <option key={o.id} value={o.id}>{s?.fields['Name']} – {o.fields['Restaurant']} ({o.fields['Order Date']})</option>;
           })}
         </select>
       </div>
-
       {order && (
         <>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-            {sup?.fields['Name']} · {order.fields['Restaurant']} · delivered {order.fields['Delivery Date']}
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+            {sup?.fields['Name']} · delivered {order.fields['Delivery Date']}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div>
             {items.map(item => {
               const prod = products.find(p => (item.fields['Product'] || []).includes(p.id));
               return (
-                <div key={item.id} style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '12px 14px' }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>{item.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
-                  {item.fields['Delivery Note'] && <div style={{ fontSize: 12, color: 'var(--text-warning)', marginBottom: 8 }}>Note: {item.fields['Delivery Note']}</div>}
+                <div key={item.id} className="card" style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--petrol)', marginBottom: 4 }}>{item.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
+                  {item.fields['Delivery Note'] && <div style={{ fontSize: 12, color: 'var(--text-warning)', marginBottom: 10 }}>📝 {item.fields['Delivery Note']}</div>}
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => setMatches(m => ({ ...m, [item.id]: 'Matches' }))}
-                      style={{ flex: 1, padding: '10px', fontSize: 13,
-                        background: matches[item.id] === 'Matches' ? 'var(--bg-success)' : 'var(--surface-2)',
-                        color: matches[item.id] === 'Matches' ? 'var(--text-success)' : 'var(--text-secondary)',
-                        border: matches[item.id] === 'Matches' ? '0.5px solid var(--text-success)' : '0.5px solid var(--border-strong)' }}>
+                      style={{ flex: 1, padding: '10px', fontSize: 13, background: matches[item.id] === 'Matches' ? 'var(--bg-success)' : '#fff', color: matches[item.id] === 'Matches' ? 'var(--text-success)' : 'var(--text-secondary)', border: matches[item.id] === 'Matches' ? '1.5px solid var(--text-success)' : '1px solid var(--border-strong)', textTransform: 'none', letterSpacing: 0 }}>
                       ✓ Matches
                     </button>
                     <button onClick={() => setMatches(m => ({ ...m, [item.id]: 'Discrepancy' }))}
-                      style={{ flex: 1, padding: '10px', fontSize: 13,
-                        background: matches[item.id] === 'Discrepancy' ? 'var(--bg-danger)' : 'var(--surface-2)',
-                        color: matches[item.id] === 'Discrepancy' ? 'var(--text-danger)' : 'var(--text-secondary)',
-                        border: matches[item.id] === 'Discrepancy' ? '0.5px solid var(--text-danger)' : '0.5px solid var(--border-strong)' }}>
+                      style={{ flex: 1, padding: '10px', fontSize: 13, background: matches[item.id] === 'Discrepancy' ? 'var(--bg-danger)' : '#fff', color: matches[item.id] === 'Discrepancy' ? 'var(--text-danger)' : 'var(--text-secondary)', border: matches[item.id] === 'Discrepancy' ? '1.5px solid var(--text-danger)' : '1px solid var(--border-strong)', textTransform: 'none', letterSpacing: 0 }}>
                       ✕ Discrepancy
                     </button>
                   </div>
@@ -642,8 +627,7 @@ function InvoiceScreen({ api }) {
               );
             })}
           </div>
-          <button onClick={closeOrder} disabled={!allReviewed || saving}
-            style={{ marginTop: '1.25rem', width: '100%', background: allReviewed ? 'var(--fill-primary)' : 'var(--fill-disabled)', color: allReviewed ? 'var(--on-primary)' : 'var(--text-disabled)', border: 'none', padding: '14px' }}>
+          <button className={allReviewed ? 'btn-primary' : 'btn-disabled'} style={{ marginTop: '1.25rem' }} onClick={closeOrder} disabled={!allReviewed || saving}>
             {saving ? <span className="spinner"></span> : 'Close order'}
           </button>
         </>
@@ -652,41 +636,30 @@ function InvoiceScreen({ api }) {
   );
 }
 
-// ─── PRODUCTS (ADMIN) ─────────────────────────────────────────────────
 function ProductsScreen({ api }) {
   const [products, setProducts] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ nameEn: '', nameEs: '', supplierId: '', unit: 'Unit', active: true });
+  const [form, setForm] = useState({ name: '', supplierId: '', unit: 'kg' });
   const [saving, setSaving] = useState(false);
 
   async function load() {
     try {
       const [p, s] = await Promise.all([api.getAll('Products'), api.getAll('Suppliers')]);
-      setProducts(p);
-      setSuppliers(s);
+      setProducts(p); setSuppliers(s);
       if (s.length) setForm(f => ({ ...f, supplierId: s[0].id }));
     } catch(e) { alert('Error: ' + e.message); }
     finally { setLoading(false); }
   }
-
   useEffect(() => { load(); }, []);
 
   async function addProduct() {
-    if (!form.nameEn) return;
+    if (!form.name) return;
     setSaving(true);
     try {
-      await api.create('Products', {
-        'Name': form.nameEn,
-        '': form.nameEs,
-        'Supplier': [form.supplierId],
-        'Unit': form.unit,
-        'Active': true,
-      });
-      setForm(f => ({ ...f, nameEn: '', nameEs: '' }));
-      setAdding(false);
-      await load();
+      await api.create('Products', { 'Name': form.name, 'Supplier': [form.supplierId], 'Unit': form.unit, 'Active': true });
+      setForm(f => ({ ...f, name: '' })); setAdding(false); await load();
     } catch(e) { alert('Error: ' + e.message); }
     finally { setSaving(false); }
   }
@@ -698,46 +671,43 @@ function ProductsScreen({ api }) {
     } catch(e) { alert('Error: ' + e.message); }
   }
 
-  if (loading) return <Loader />;
-
+  if (loading) return <div className="content"><Loader /></div>;
   return (
-    <div>
+    <div className="content">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{products.length} products total</div>
-        <button onClick={() => setAdding(!adding)} style={{ fontSize: 13, padding: '8px 14px', minHeight: 36 }}>
+        <button onClick={() => setAdding(!adding)} style={{ fontSize: 12, padding: '8px 14px', minHeight: 36, background: adding ? 'var(--cream-dark)' : 'var(--petrol)', color: adding ? 'var(--text-primary)' : '#fff', borderColor: adding ? 'var(--border)' : 'var(--petrol)' }}>
           {adding ? 'Cancel' : '+ Add product'}
         </button>
       </div>
-
       {adding && (
-        <div style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius)', padding: '1rem', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <input placeholder="Name" value={form.nameEn} onChange={e => setForm(f => ({ ...f, nameEn: e.target.value }))} style={{ width: '100%' }} />
-          <input placeholder="" value={form.nameEs} onChange={e => setForm(f => ({ ...f, nameEs: e.target.value }))} style={{ width: '100%' }} />
-          <select value={form.supplierId} onChange={e => setForm(f => ({ ...f, supplierId: e.target.value }))} style={{ width: '100%' }}>
-            {suppliers.map(s => <option key={s.id} value={s.id}>{s.fields['Name']}</option>)}
-          </select>
-          <select value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} style={{ width: '100%' }}>
-            {['kg', 'gramm', 'box/caja', 'piece/pieza', 'pack/paqueta', 'liter', 'unit', 'barril'].map(u => <option key={u} value={u}>{u}</option>)}
-          </select>
-          <button onClick={addProduct} disabled={!form.nameEn || saving}
-            style={{ background: 'var(--fill-primary)', color: 'var(--on-primary)', border: 'none', padding: '12px' }}>
-            {saving ? <span className="spinner"></span> : 'Save product'}
-          </button>
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <input placeholder="Product name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            <select value={form.supplierId} onChange={e => setForm(f => ({ ...f, supplierId: e.target.value }))}>
+              {suppliers.map(s => <option key={s.id} value={s.id}>{s.fields['Name']}</option>)}
+            </select>
+            <select value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}>
+              {['kg', 'gramm', 'box/caja', 'piece/pieza', 'pack/paqueta', 'liter', 'unit', 'barril'].map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+            <button className="btn-primary" onClick={addProduct} disabled={!form.name || saving}>
+              {saving ? <span className="spinner"></span> : 'Save product'}
+            </button>
+          </div>
         </div>
       )}
-
       {suppliers.map(s => {
         const ps = products.filter(p => (p.fields['Supplier'] || []).includes(s.id));
         if (!ps.length) return null;
         return (
-          <div key={s.id} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.3 }}>{s.fields['Name']}</div>
+          <div key={s.id} style={{ marginBottom: 20 }}>
+            <div className="section-label" style={{ marginBottom: 6 }}>{s.fields['Name']}</div>
             {ps.map(p => (
-              <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '10px', fontSize: 13, borderBottom: '0.5px solid var(--border)', opacity: p.fields['Active'] === false ? 0.4 : 1 }}>
-                <span style={{ minWidth: 0 }}>{p.fields['Name']} <span style={{ color: 'var(--text-muted)' }}>/ {p.fields['']}</span></span>
-                <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.fields['Unit']}</span>
-                  <button onClick={() => toggleActive(p)} style={{ fontSize: 11, padding: '4px 8px', minHeight: 28, color: p.fields['Active'] === false ? 'var(--text-success)' : 'var(--text-danger)' }}>
+              <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '10px 12px', fontSize: 13, borderBottom: '1px solid var(--border)', opacity: p.fields['Active'] === false ? 0.4 : 1, background: '#fff' }}>
+                <span style={{ fontWeight: 500, color: 'var(--petrol)' }}>{p.fields['Name']}</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{p.fields['Unit']}</span>
+                  <button onClick={() => toggleActive(p)} style={{ fontSize: 11, padding: '4px 10px', minHeight: 28, color: p.fields['Active'] === false ? 'var(--text-success)' : 'var(--text-danger)', borderColor: p.fields['Active'] === false ? 'var(--text-success)' : 'var(--text-danger)', background: '#fff', textTransform: 'none', letterSpacing: 0 }}>
                     {p.fields['Active'] === false ? 'Activate' : 'Deactivate'}
                   </button>
                 </div>
@@ -750,27 +720,43 @@ function ProductsScreen({ api }) {
   );
 }
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('groenk_token') || '');
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState('new');
-
   const api = token ? airtable(token) : null;
+
+  const tabs = [
+    { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin'] },
+    { id: 'pending', label: 'Open orders', icon: 'ti-clock', roles: ['kitchen', 'admin', 'manager'] },
+    { id: 'delivery', label: 'Receive goods', icon: 'ti-truck', roles: ['kitchen', 'admin'] },
+    { id: 'invoice', label: 'Check invoice', icon: 'ti-file-check', roles: ['manager', 'admin'] },
+    { id: 'products', label: 'Products', icon: 'ti-list', roles: ['admin'] },
+  ];
 
   if (!token) return <SetupScreen onSave={setToken} />;
   if (!user) return <LoginScreen onLogin={(name, role, restaurant) => { setUser({ name, role, restaurant }); setTab(role === 'manager' ? 'invoice' : 'new'); }} />;
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-        <div style={{ minWidth: 0 }}>
-          <h2 style={{ margin: 0 }}>Grøenk Procurement</h2>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{user.name} · {user.role}{user.restaurant ? ` · ${user.restaurant}` : ''}</div>
+      <div className="app-header">
+        <div className="app-header-top">
+          <div>
+            <h2>Grøenk Procurement</h2>
+            <div className="app-subtitle">{user.name} · {user.role}{user.restaurant ? ` · ${user.restaurant}` : ''}</div>
+          </div>
+          <button onClick={() => setUser(null)} style={{ fontSize: 11, padding: '6px 12px', minHeight: 32, background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Sign out
+          </button>
         </div>
-        <button onClick={() => setUser(null)} style={{ fontSize: 12, padding: '8px 12px', minHeight: 36 }}>Sign out</button>
+        <div className="nav-scroll">
+          {tabs.filter(t => t.roles.includes(user.role)).map(t => (
+            <button key={t.id} className={`nav-btn ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
+              <i className={`ti ${t.icon}`} style={{ fontSize: 15 }}></i>{t.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <NavTabs active={tab} setActive={setTab} role={user.role} />
       {tab === 'new' && <NewOrderScreen user={user} api={api} />}
       {tab === 'pending' && <PendingOrdersScreen api={api} />}
       {tab === 'delivery' && <DeliveryScreen api={api} />}
@@ -779,7 +765,6 @@ function App() {
     </div>
   );
 }
-
 ReactDOM.createRoot(document.getElementById('app-root')).render(<App />);
 </script>
 </body>
