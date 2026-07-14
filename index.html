@@ -720,6 +720,102 @@ function ProductsScreen({ api }) {
   );
 }
 
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+const DELIVERY_SCHEDULE = {
+  Monday:    { deia: ['Comercial Vera', 'Carnicas Sunyer', 'Llorenc Cerda', 'Estrella Galicia', 'Repsol'], fornalutx: ['Comercial Vera', 'Carnicas Sunyer', 'Repsol'], soller: ['Repsol'] },
+  Tuesday:   { deia: ['Bagur', 'Comercial Vera', 'Kimva', 'Llorenc Cerda'], fornalutx: ['Bagur', 'Discarlux'], soller: ['Dis Amoro'] },
+  Wednesday: { deia: ['Carnicas Sunyer', 'Comercial Vera', 'Etika', 'Llorenc Cerda', 'Rosa Blanca', 'Tunel'], fornalutx: ['Carnicas Sunyer', 'Comercial Vera', 'Etika', 'Licores Moya', 'Llorenc Cerda', 'Rosa Blanca', 'Tunel'], soller: ['Hermanos Rodriguez Barbancho', 'Tunel'] },
+  Thursday:  { deia: ['Licores Moya', 'Llorenc Cerda'], fornalutx: ['Comercial Vera', 'Estrella Galicia', 'Kimva'], soller: ['Kimva'] },
+  Friday:    { deia: ['Bagur', 'Comercial Vera', 'Carnicas Sunyer', 'Llorenc Cerda', 'Tunel'], fornalutx: ['Bagur', 'Comercial Vera', 'Carnicas Sunyer', 'Tunel'], soller: ['Tunel'] },
+  Saturday:  { deia: [], fornalutx: ['Discarlux'], soller: [] },
+  Sunday:    { deia: [], fornalutx: [], soller: [] },
+};
+
+const INFO_LOCATIONS = [
+  { key: 'deia', label: 'Deià', colorKey: 'Deia - Groenk Bistro' },
+  { key: 'fornalutx', label: 'Fornalutx', colorKey: 'Fornalutx - Groenk Bistro' },
+  { key: 'soller', label: 'Sóller', colorKey: 'Soller - Groenk Pizza' },
+];
+
+const DAILY_SUPPLIERS = ['Forn de Barri', 'Frutas Daniel', 'Groenk Production Kitchen', 'Carbón Agrícola Illenca (weekdays)', 'Pescado Mayol (Fornalutx, ex. Sun)', 'Pescado Villa de Sóller (Deià, ex. Sun)'];
+const RANDOM_SUPPLIERS = ['Can Cavall Blau', 'Can Gelat', 'Taroncello', 'Testim (Sóller, Deià, Fornalutx)'];
+const EMESE_ORDERED = ['Coffee', 'Vermouth'];
+const ORDER_DEADLINES = [
+  'Carbón Agrícola Illenca — order 2 days before delivery',
+  'Dis Amoro (Sóller) — order by Monday 13:00 → delivered Tuesday',
+  'Repsol (fuel) — order via app by Friday 12:00 → delivered Monday',
+  'Discarlux — order handled by Emese',
+];
+
+function InfoScreen() {
+  const todayIdx = (new Date().getDay() + 6) % 7; // Mon=0 ... Sun=6
+  const [day, setDay] = useState(DAYS[todayIdx]);
+  const daySchedule = DELIVERY_SCHEDULE[day];
+
+  return (
+    <div className="content">
+      <div className="section-label">Delivery day</div>
+      <div className="nav-scroll" style={{ marginBottom: '1.25rem' }}>
+        {DAYS.map(d => (
+          <button
+            key={d}
+            onClick={() => setDay(d)}
+            style={{
+              flexShrink: 0, padding: '8px 14px', minHeight: 36, fontSize: 12,
+              borderRadius: 20, textTransform: 'uppercase', letterSpacing: '0.06em',
+              background: d === day ? 'var(--petrol)' : '#fff',
+              color: d === day ? '#fff' : 'var(--text-secondary)',
+              borderColor: d === day ? 'var(--petrol)' : 'var(--border-strong)',
+            }}>
+            {d.slice(0, 3)}
+          </button>
+        ))}
+      </div>
+
+      {INFO_LOCATIONS.map(loc => {
+        const suppliers = daySchedule[loc.key];
+        const rc = REST_COLORS[loc.colorKey] || { bg: '#eee', text: '#555' };
+        return (
+          <div key={loc.key} className="card">
+            <div style={{ marginBottom: 8 }}>
+              <span className="badge" style={{ background: rc.bg, color: rc.text }}>{loc.label}</span>
+            </div>
+            {suppliers.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No scheduled supplier deliveries</div>
+            ) : (
+              suppliers.map((s, i) => (
+                <div key={i} style={{ fontSize: 14, fontWeight: 600, color: 'var(--petrol)', padding: '5px 0', borderBottom: i < suppliers.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                  {s}
+                </div>
+              ))
+            )}
+          </div>
+        );
+      })}
+
+      <div className="card card-muted">
+        <div className="section-label">Every day (or weekdays), all locations</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.9 }}>{DAILY_SUPPLIERS.join(' · ')}</div>
+      </div>
+
+      <div className="card card-muted">
+        <div className="section-label">Random / no fixed day</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.9 }}>{RANDOM_SUPPLIERS.join(' · ')}</div>
+        <div className="section-label" style={{ marginTop: 12 }}>Ordered directly by Emese</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{EMESE_ORDERED.join(' · ')}</div>
+      </div>
+
+      <div className="card" style={{ background: '#FBEAE0', border: '1px solid #E8C4A8' }}>
+        <div className="section-label" style={{ color: 'var(--text-warning)' }}>⏰ Key order deadlines</div>
+        {ORDER_DEADLINES.map((d, i) => (
+          <div key={i} style={{ fontSize: 13, color: 'var(--text-warning)', padding: '4px 0' }}>{d}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('groenk_token') || '');
   const [user, setUser] = useState(null);
@@ -730,6 +826,7 @@ function App() {
     { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin'] },
     { id: 'pending', label: 'Open orders', icon: 'ti-clock', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'delivery', label: 'Receive goods', icon: 'ti-truck', roles: ['kitchen', 'admin'] },
+    { id: 'info', label: 'Info', icon: 'ti-info-circle', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'invoice', label: 'Check invoice', icon: 'ti-file-check', roles: ['manager', 'admin'] },
     { id: 'products', label: 'Products', icon: 'ti-list', roles: ['admin'] },
   ];
@@ -762,6 +859,7 @@ function App() {
       {tab === 'new' && <NewOrderScreen user={user} api={api} />}
       {tab === 'pending' && <PendingOrdersScreen api={api} />}
       {tab === 'delivery' && <DeliveryScreen api={api} />}
+      {tab === 'info' && <InfoScreen />}
       {tab === 'invoice' && <InvoiceScreen api={api} />}
       {tab === 'products' && <ProductsScreen api={api} />}
     </div>
