@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -458,6 +459,7 @@ function DeliveryScreen({ api }) {
   const [selected, setSelected] = useState(null);
   const [checks, setChecks] = useState({});
   const [notes, setNotes] = useState({});
+  const [receivedQty, setReceivedQty] = useState({});
   const [openNote, setOpenNote] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -483,11 +485,12 @@ function DeliveryScreen({ api }) {
     setSaving(true);
     try {
       for (const item of items) {
-        await api.update('Order Items', item.id, { 'Received': !!checks[item.id], 'Delivery Note': notes[item.id] || '' });
+        const qty = receivedQty[item.id] !== undefined && receivedQty[item.id] !== '' ? Number(receivedQty[item.id]) : Number(item.fields['Quantity']);
+        await api.update('Order Items', item.id, { 'Received': !!checks[item.id], 'Delivery Note': notes[item.id] || '', 'Received Qty': qty });
       }
       await api.update('Orders', order.id, { 'Status': 'Delivered', 'Delivery Date': new Date().toISOString().slice(0,10) });
       setOrders(o => o.filter(x => x.id !== order.id));
-      setSelected(null); setChecks({}); setNotes({});
+      setSelected(null); setChecks({}); setNotes({}); setReceivedQty({});
     } catch(e) { alert('Error: ' + e.message); }
     finally { setSaving(false); }
   }
@@ -501,7 +504,7 @@ function DeliveryScreen({ api }) {
     <div className="content">
       <div style={{ marginBottom: '1rem' }}>
         <div className="section-label">Select order</div>
-        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setChecks({}); setNotes({}); }}>
+        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setChecks({}); setNotes({}); setReceivedQty({}); }}>
           {orders.map(o => {
             const s = suppliers.find(x => x.id === (o.fields['Supplier'] || [])[0]);
             return <option key={o.id} value={o.id}>{s?.fields['Name']} – {o.fields['Restaurant']} ({o.fields['Order Date']})</option>;
@@ -517,16 +520,32 @@ function DeliveryScreen({ api }) {
           <div>
             {items.map(item => {
               const prod = products.find(p => (item.fields['Product'] || []).includes(p.id));
+              const ordered = Number(item.fields['Quantity']);
+              const currentReceived = receivedQty[item.id] !== undefined ? receivedQty[item.id] : ordered;
+              const differs = Number(currentReceived) !== ordered;
               return (
                 <div key={item.id} className="card card-muted" style={{ marginBottom: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }} onClick={() => setChecks(c => ({ ...c, [item.id]: !c[item.id] }))}>
-                    <input type="checkbox" checked={!!checks[item.id]} readOnly style={{ width: 22, height: 22, minHeight: 22, padding: 0, accentColor: 'var(--petrol)' }} />
-                    <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <input type="checkbox" checked={!!checks[item.id]} onChange={() => setChecks(c => ({ ...c, [item.id]: !c[item.id] }))} style={{ width: 22, height: 22, minHeight: 22, padding: 0, accentColor: 'var(--petrol)' }} />
+                    <div style={{ flex: 1 }} onClick={() => setChecks(c => ({ ...c, [item.id]: !c[item.id] }))}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: checks[item.id] ? 'var(--text-muted)' : 'var(--petrol)', textDecoration: checks[item.id] ? 'line-through' : 'none' }}>
-                        {item.fields['Quantity']} × {prod?.fields['Name'] || '...'}
+                        {prod?.fields['Name'] || '...'}
                       </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Ordered: {ordered}</div>
                     </div>
                     {checks[item.id] && <i className="ti ti-check" style={{ color: 'var(--text-success)', fontSize: 20 }}></i>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Received qty:</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      value={currentReceived}
+                      onChange={e => setReceivedQty(q => ({ ...q, [item.id]: e.target.value }))}
+                      onClick={e => e.stopPropagation()}
+                      style={{ width: 80, fontSize: 14, padding: '4px 8px', minHeight: 32, border: differs ? '1px solid var(--text-warning, #c77700)' : undefined }}
+                    />
+                    {differs && <span style={{ fontSize: 12, color: 'var(--text-warning, #c77700)' }}>⚠ differs from ordered</span>}
                   </div>
                   <button onClick={() => setOpenNote(openNote === item.id ? null : item.id)}
                     style={{ marginTop: 8, fontSize: 12, padding: '4px 8px', minHeight: 28, color: notes[item.id] ? 'var(--text-warning)' : 'var(--text-muted)', background: 'transparent', border: 'none', textTransform: 'none', letterSpacing: 0 }}>
