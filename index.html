@@ -540,6 +540,7 @@ function DeliveryScreen({ api }) {
                     <input
                       type="number"
                       inputMode="decimal"
+                      step="0.01"
                       value={currentReceived}
                       onChange={e => setReceivedQty(q => ({ ...q, [item.id]: e.target.value }))}
                       onClick={e => e.stopPropagation()}
@@ -574,6 +575,7 @@ function InvoiceScreen({ api }) {
   const [products, setProducts] = useState([]);
   const [selected, setSelected] = useState(null);
   const [matches, setMatches] = useState({});
+  const [receivedQty, setReceivedQty] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -598,10 +600,15 @@ function InvoiceScreen({ api }) {
   async function closeOrder() {
     setSaving(true);
     try {
-      for (const item of items) await api.update('Order Items', item.id, { 'Invoice Match': matches[item.id] || 'Pending Review' });
+      for (const item of items) {
+        const fields = { 'Invoice Match': matches[item.id] || 'Pending Review' };
+        const rq = receivedQty[item.id];
+        if (rq !== undefined && rq !== '') fields['Received Qty'] = Number(rq);
+        await api.update('Order Items', item.id, fields);
+      }
       await api.update('Orders', order.id, { 'Status': 'Closed' });
       setOrders(o => o.filter(x => x.id !== order.id));
-      setSelected(null); setMatches({});
+      setSelected(null); setMatches({}); setReceivedQty({});
     } catch(e) { alert('Error: ' + e.message); }
     finally { setSaving(false); }
   }
@@ -613,7 +620,7 @@ function InvoiceScreen({ api }) {
     <div className="content">
       <div style={{ marginBottom: '1rem' }}>
         <div className="section-label">Select order</div>
-        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setMatches({}); }}>
+        <select value={selected || ''} onChange={e => { setSelected(e.target.value); setMatches({}); setReceivedQty({}); }}>
           {orders.map(o => {
             const s = suppliers.find(x => x.id === (o.fields['Supplier'] || [])[0]);
             return <option key={o.id} value={o.id}>{s?.fields['Name']} – {o.fields['Restaurant']} ({o.fields['Order Date']})</option>;
@@ -628,10 +635,26 @@ function InvoiceScreen({ api }) {
           <div>
             {items.map(item => {
               const prod = products.find(p => (item.fields['Product'] || []).includes(p.id));
+              const ordered = Number(item.fields['Quantity']);
+              const currentReceived = receivedQty[item.id] !== undefined ? receivedQty[item.id] : (item.fields['Received Qty'] !== undefined ? item.fields['Received Qty'] : ordered);
+              const differs = Number(currentReceived) !== ordered;
               return (
                 <div key={item.id} className="card" style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--petrol)', marginBottom: 4 }}>{item.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--petrol)', marginBottom: 4 }}>{prod?.fields['Name'] || '...'}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Ordered: {ordered}</div>
                   {item.fields['Delivery Note'] && <div style={{ fontSize: 12, color: 'var(--text-warning)', marginBottom: 10 }}>📝 {item.fields['Delivery Note']}</div>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Received qty:</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      value={currentReceived}
+                      onChange={e => setReceivedQty(q => ({ ...q, [item.id]: e.target.value }))}
+                      style={{ width: 80, fontSize: 14, padding: '4px 8px', minHeight: 32, border: differs ? '1px solid var(--text-warning, #c77700)' : undefined }}
+                    />
+                    {differs && <span style={{ fontSize: 12, color: 'var(--text-warning, #c77700)' }}>⚠ differs from ordered</span>}
+                  </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => setMatches(m => ({ ...m, [item.id]: 'Matches' }))}
                       style={{ flex: 1, padding: '10px', fontSize: 13, background: matches[item.id] === 'Matches' ? 'var(--bg-success)' : '#fff', color: matches[item.id] === 'Matches' ? 'var(--text-success)' : 'var(--text-secondary)', border: matches[item.id] === 'Matches' ? '1.5px solid var(--text-success)' : '1px solid var(--border-strong)', textTransform: 'none', letterSpacing: 0 }}>
