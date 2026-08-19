@@ -403,6 +403,10 @@ function PendingOrdersScreen({ api }) {
   const [items, setItems] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [edits, setEdits] = useState({});        // itemId -> quantity string
+  const [newLines, setNewLines] = useState({});   // orderId -> [{productId, qty}]
+  const [addingTo, setAddingTo] = useState(null); // orderId currently showing the "add item" picker
+  const [savingOrder, setSavingOrder] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -416,6 +420,49 @@ function PendingOrdersScreen({ api }) {
     load();
   }, []);
 
+  function addBlankLine(orderId) {
+    setNewLines(nl => ({ ...nl, [orderId]: [...(nl[orderId] || []), { productId: '', qty: '' }] }));
+    setAddingTo(orderId);
+  }
+  function updateNewLine(orderId, idx, field, value) {
+    setNewLines(nl => {
+      const arr = [...(nl[orderId] || [])];
+      arr[idx] = { ...arr[idx], [field]: value };
+      return { ...nl, [orderId]: arr };
+    });
+  }
+  function removeNewLine(orderId, idx) {
+    setNewLines(nl => {
+      const arr = [...(nl[orderId] || [])];
+      arr.splice(idx, 1);
+      return { ...nl, [orderId]: arr };
+    });
+  }
+
+  async function saveOrderChanges(orderId, oItems) {
+    setSavingOrder(orderId);
+    try {
+      for (const it of oItems) {
+        const val = edits[it.id];
+        if (val !== undefined && val !== '' && Number(val) !== it.fields['Quantity']) {
+          await api.update('Order Items', it.id, { 'Quantity': Number(val) });
+        }
+      }
+      const toAdd = (newLines[orderId] || []).filter(l => l.productId && Number(l.qty) > 0);
+      if (toAdd.length) {
+        await api.createMany('Order Items', toAdd.map(l => ({
+          'Order': [orderId], 'Product': [l.productId], 'Quantity': Number(l.qty), 'Received': false, 'Invoice Match': 'Pending Review'
+        })));
+      }
+      const [i2] = await Promise.all([api.getAll('Order Items')]);
+      setItems(i2);
+      setEdits(e => { const n = { ...e }; oItems.forEach(it => delete n[it.id]); return n; });
+      setNewLines(nl => ({ ...nl, [orderId]: [] }));
+      setAddingTo(null);
+    } catch(e) { alert('Error: ' + e.message); }
+    finally { setSavingOrder(null); }
+  }
+
   if (loading) return <div className="content"><Loader /></div>;
   if (!orders.length) return <div className="content" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>No open orders.</div>;
 
@@ -425,6 +472,9 @@ function PendingOrdersScreen({ api }) {
         const sup = suppliers.find(s => s.id === (o.fields['Supplier'] || [])[0]);
         const oItems = items.filter(i => (i.fields['Order'] || []).includes(o.id));
         const rc = REST_COLORS[o.fields['Restaurant']] || { bg: '#eee', text: '#555' };
+        const supplierProducts = products.filter(p => (p.fields['Supplier'] || []).includes(sup?.id));
+        const hasChanges = oItems.some(it => edits[it.id] !== undefined && edits[it.id] !== '' && Number(edits[it.id]) !== it.fields['Quantity'])
+          || (newLines[o.id] || []).some(l => l.productId && Number(l.qty) > 0);
         return (
           <div key={o.id} className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 8 }}>
@@ -438,11 +488,54 @@ function PendingOrdersScreen({ api }) {
               </div>
             </div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-              {oItems.length === 0 ? <span style={{ color: 'var(--text-muted)' }}>No items</span> :
+              {oItems.length === 0 && !(newLines[o.id] || []).length ? <span style={{ color: 'var(--text-muted)' }}>No items</span> :
                 oItems.map((it, i) => {
                   const prod = products.find(p => (it.fields['Product'] || []).includes(p.id));
-                  return <div key={i} style={{ padding: '2px 0' }}>{it.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>;
+                  const currentVal = edits[it.id] !== undefined ? edits[it.id] : it.fields['Quantity'];
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                      <input
+                        type="number" inputMode="decimal" step="0.01" min="0"
+                        value={currentVal}
+                        onChange={e => setEdits(ed => ({ ...ed, [it.id]: e.target.value }))}
+                        style={{ width: 70, fontSize: 13, padding: '3px 6px', minHeight: 28 }}
+                      />
+                      <span>× {prod?.fields['Name'] || '...'}</span>
+                    </div>
+                  );
                 })}
+              {(newLines[o.id] || []).map((line, idx) => (
+                <div key={'new'+idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                  <input
+                    type="number" inputMode="decimal" step="0.01" min="0" placeholder="qty"
+                    value={line.qty}
+                    onChange={e => updateNewLine(o.id, idx, 'qty', e.target.value)}
+                    style={{ width: 70, fontSize: 13, padding: '3px 6px', minHeight: 28 }}
+                  />
+                  <select
+                    value={line.productId}
+                    onChange={e => updateNewLine(o.id, idx, 'productId', e.target.value)}
+                    style={{ flex: 1, fontSize: 13, padding: '3px 6px', minHeight: 28 }}
+                  >
+                    <option value="">Select product...</option>
+                    {supplierProducts.map(p => <option key={p.id} value={p.id}>{p.fields['Name']}</option>)}
+                  </select>
+                  <button onClick={() => removeNewLine(o.id, idx)} style={{ padding: '2px 8px', minHeight: 28 }}>
+                    <i className="ti ti-x" style={{ fontSize: 14 }}></i>
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button className="btn-ghost" style={{ flex: 1, fontSize: 12, padding: '8px' }} onClick={() => addBlankLine(o.id)}>
+                + Add item
+              </button>
+              {hasChanges && (
+                <button className="btn-primary" style={{ flex: 1, fontSize: 12, padding: '8px' }}
+                  onClick={() => saveOrderChanges(o.id, oItems)} disabled={savingOrder === o.id}>
+                  {savingOrder === o.id ? <span className="spinner"></span> : 'Save changes'}
+                </button>
+              )}
             </div>
           </div>
         );
