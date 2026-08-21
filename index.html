@@ -143,7 +143,17 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect } = React;
 const BASE_ID = 'appPcdy4HEJuDOF4j';
+const STAFF_BASE_ID = 'appVFkDBFTLIsqtlN';
 const RESTAURANTS = ['Soller - Groenk Pizza', 'Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Groenk Production Kitchen Fornalutx'];
+
+// Maps an Employees record (Role + Department) to this app's permission level.
+function mapEmployeeToAppRole(fields) {
+  const role = fields['Role'] || '';
+  const dept = fields['Department'] || '';
+  if (role === 'Owner' || dept === 'Administration') return 'admin';
+  if (role === 'Manager') return 'manager';
+  return 'kitchen'; // Employee / Supervisor in Floor or Kitchen
+}
 const REST_COLORS = {
   'Soller - Groenk Pizza': { bg: '#DDEEFF', text: '#1a3a6e' },
   'Deia - Groenk Bistro': { bg: '#FCE4D6', text: '#7B2D00' },
@@ -151,8 +161,8 @@ const REST_COLORS = {
   'Groenk Production Kitchen Fornalutx': { bg: '#E8E8E8', text: '#333' },
 };
 
-function airtable(token) {
-  const base = `https://api.airtable.com/v0/${BASE_ID}`;
+function airtable(token, baseId) {
+  const base = `https://api.airtable.com/v0/${baseId || BASE_ID}`;
   const h = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
   async function getAll(table) {
     let records = [], offset = null;
@@ -244,10 +254,33 @@ function SetupScreen({ onSave }) {
   );
 }
 
-function LoginScreen({ onLogin }) {
-  const [name, setName] = useState('');
-  const [role, setRole] = useState('kitchen');
-  const [restaurant, setRestaurant] = useState(RESTAURANTS[0]);
+function AccessCodeScreen({ staffApi, onLogin }) {
+  const [code, setCode] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit() {
+    const trimmed = code.trim();
+    if (!trimmed) return;
+    setChecking(true); setError('');
+    try {
+      const employees = await staffApi.getAll('Employees');
+      const match = employees.find(e => (e.fields['Access Code'] || '').trim() === trimmed && e.fields['Active'] !== false);
+      if (!match) { setError('Code not recognized, or account inactive.'); return; }
+      const location = match.fields['Location'];
+      if (!RESTAURANTS.includes(location)) {
+        setError('This employee has no matching restaurant location set up. Contact admin.');
+        return;
+      }
+      onLogin({
+        name: match.fields['Name'] || 'Staff',
+        role: mapEmployeeToAppRole(match.fields),
+        restaurant: location,
+      });
+    } catch(e) { setError('Error: ' + e.message); }
+    finally { setChecking(false); }
+  }
+
   return (
     <div>
       <div className="app-header">
@@ -258,28 +291,22 @@ function LoginScreen({ onLogin }) {
       <div className="content" style={{ maxWidth: 380, margin: '1rem auto' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
-            <div className="section-label">Your name</div>
-            <input type="text" placeholder="e.g. Maria" value={name} onChange={e => setName(e.target.value)} />
+            <div className="section-label">Access code</div>
+            <input
+              type="password" inputMode="numeric" maxLength={5} autoFocus
+              placeholder="5-digit code" value={code}
+              onChange={e => setCode(e.target.value.replace(/[^0-9]/g, ''))}
+              onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+              style={{ textAlign: 'center', fontSize: 24, letterSpacing: '0.3em', padding: '16px' }}
+            />
           </div>
-          <div>
-            <div className="section-label">Role</div>
-            <select value={role} onChange={e => setRole(e.target.value)}>
-              <option value="kitchen">Kitchen staff</option>
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
-          {(role === 'kitchen' || role === 'admin') && (
-            <div>
-              <div className="section-label">Restaurant</div>
-              <select value={restaurant} onChange={e => setRestaurant(e.target.value)}>
-                {RESTAURANTS.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-          )}
-          <button className="btn-primary" style={{ marginTop: 8 }} onClick={() => onLogin(name || 'Guest', role, restaurant)}>
-            Sign in
+          {error && <div style={{ color: 'var(--text-danger)', fontSize: 13 }}>{error}</div>}
+          <button className="btn-primary" style={{ marginTop: 8 }} onClick={submit} disabled={!code || checking}>
+            {checking ? <span className="spinner"></span> : 'Sign in'}
           </button>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
+            Same code you use for Grøenk Staff.
+          </div>
         </div>
       </div>
     </div>
@@ -397,7 +424,7 @@ function NewOrderScreen({ user, api }) {
   );
 }
 
-function PendingOrdersScreen({ api }) {
+function PendingOrdersScreen({ user, api }) {
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [items, setItems] = useState([]);
@@ -412,7 +439,9 @@ function PendingOrdersScreen({ api }) {
     async function load() {
       try {
         const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
-        setOrders(o.filter(x => x.fields['Status'] !== 'Closed').sort((a,b) => (b.fields['Order Date'] || '').localeCompare(a.fields['Order Date'] || '')));
+        let scoped = o.filter(x => x.fields['Status'] !== 'Closed');
+        if (user.role === 'kitchen') scoped = scoped.filter(x => x.fields['Restaurant'] === user.restaurant);
+        setOrders(scoped.sort((a,b) => (b.fields['Order Date'] || '').localeCompare(a.fields['Order Date'] || '')));
         setSuppliers(s); setItems(i); setProducts(p);
       } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
@@ -544,7 +573,7 @@ function PendingOrdersScreen({ api }) {
   );
 }
 
-function DeliveryScreen({ api }) {
+function DeliveryScreen({ user, api }) {
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [allItems, setAllItems] = useState([]);
@@ -561,7 +590,8 @@ function DeliveryScreen({ api }) {
     async function load() {
       try {
         const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
-        const pending = o.filter(x => x.fields['Status'] === 'Pending');
+        let pending = o.filter(x => x.fields['Status'] === 'Pending');
+        if (user.role === 'kitchen') pending = pending.filter(x => x.fields['Restaurant'] === user.restaurant);
         setOrders(pending); setSuppliers(s); setAllItems(i); setProducts(p);
         if (pending.length) setSelected(pending[0].id);
       } catch(e) { alert('Error: ' + e.message); }
@@ -956,6 +986,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState('new');
   const api = token ? airtable(token) : null;
+  const staffApi = token ? airtable(token, STAFF_BASE_ID) : null;
 
   const tabs = [
     { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin'] },
@@ -967,7 +998,7 @@ function App() {
   ];
 
   if (!token) return <SetupScreen onSave={setToken} />;
-  if (!user) return <LoginScreen onLogin={(name, role, restaurant) => { setUser({ name, role, restaurant }); setTab(role === 'manager' ? 'invoice' : 'new'); }} />;
+  if (!user) return <AccessCodeScreen staffApi={staffApi} onLogin={(u) => { setUser(u); setTab(u.role === 'manager' ? 'invoice' : 'new'); }} />;
 
   return (
     <div>
@@ -992,8 +1023,8 @@ function App() {
         </div>
       </div>
       {tab === 'new' && <NewOrderScreen user={user} api={api} />}
-      {tab === 'pending' && <PendingOrdersScreen api={api} />}
-      {tab === 'delivery' && <DeliveryScreen api={api} />}
+      {tab === 'pending' && <PendingOrdersScreen user={user} api={api} />}
+      {tab === 'delivery' && <DeliveryScreen user={user} api={api} />}
       {tab === 'info' && <InfoScreen />}
       {tab === 'invoice' && <InvoiceScreen api={api} />}
       {tab === 'products' && <ProductsScreen api={api} />}
