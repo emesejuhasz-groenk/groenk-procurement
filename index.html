@@ -162,11 +162,13 @@ const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Other'
 
 // Maps an Employees record (Role + Department) to this app's permission level.
 function mapEmployeeToAppRole(fields) {
-  const role = fields['Role'] || '';
-  const dept = fields['Department'] || '';
-  if (role === 'Owner' || dept === 'Administration') return 'admin';
+  const role = String(fields['Role'] || '').trim();
+  const dept = String(fields['Department'] || '').trim();
+  if (role === 'Owner') return 'admin';
   if (role === 'Manager') return 'manager';
-  return 'kitchen'; // Employee / Supervisor in Floor or Kitchen
+  if (role === 'Supervisor' || role === 'Employee') return 'kitchen'; // always kitchen staff, regardless of Department
+  if (dept === 'Administration') return 'admin'; // fallback for records with no matching Role
+  return 'kitchen';
 }
 const REST_COLORS = {
   'Soller - Groenk Pizza': { bg: '#DDEEFF', text: '#1a3a6e' },
