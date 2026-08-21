@@ -1,0 +1,25 @@
+name: BOM import (one-off)
+
+on:
+  workflow_dispatch: {} # manual trigger only — this is not a scheduled/recurring job
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./bom-import
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run BOM import
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+        run: node bom-import.js Groenk_Item_List_from_Recipes_0821.xlsx
