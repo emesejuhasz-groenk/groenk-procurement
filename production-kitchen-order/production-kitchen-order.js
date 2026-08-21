@@ -266,19 +266,39 @@ async function main() {
   ];
   sheet.getRow(1).font = { bold: true };
 
+  const CATEGORY_ORDER = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
+  const byCategory = {};
+
   for (const productId of allProductIds) {
     const p = productById[productId] || {};
     const deia = results['Deia - Groenk Bistro'][productId] || 0;
     const fornalutx = results['Fornalutx - Groenk Bistro'][productId] || 0;
     const soller = results['Soller - Groenk Pizza'][productId] || 0;
-    sheet.addRow({
+    const category = p['Order Category'] || 'Other';
+    (byCategory[category] = byCategory[category] || []).push({
       product: p['Name'] || '(unknown product)',
       unit: p['Unit'] || '',
-      deia: deia || '',
-      fornalutx: fornalutx || '',
-      soller: soller || '',
+      deia, fornalutx, soller,
       total: deia + fornalutx + soller,
     });
+  }
+
+  for (const cat of CATEGORY_ORDER) {
+    const rows = byCategory[cat];
+    if (!rows || !rows.length) continue;
+    const headerRow = sheet.addRow({ product: cat });
+    headerRow.font = { bold: true };
+    headerRow.eachCell(cell => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E8E8' } }; });
+    for (const row of rows) {
+      sheet.addRow({
+        product: row.product,
+        unit: row.unit,
+        deia: row.deia || '',
+        fornalutx: row.fornalutx || '',
+        soller: row.soller || '',
+        total: row.total,
+      });
+    }
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
