@@ -1205,12 +1205,12 @@ function App() {
   const staffApi = token ? airtable(token, STAFF_BASE_ID) : null;
 
   const tabs = [
-    { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin'] },
+    { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'pending', label: 'Open orders', icon: 'ti-clock', roles: ['kitchen', 'admin', 'manager'] },
-    { id: 'delivery', label: 'Receive goods', icon: 'ti-truck', roles: ['kitchen', 'admin'] },
-    { id: 'inventory', label: 'Inventory', icon: 'ti-clipboard-list', roles: ['kitchen', 'admin'] },
+    { id: 'delivery', label: 'Receive goods', icon: 'ti-truck', roles: ['kitchen', 'admin', 'manager'] },
+    { id: 'inventory', label: 'Inventory', icon: 'ti-clipboard-list', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'info', label: 'Info', icon: 'ti-info-circle', roles: ['kitchen', 'admin', 'manager'] },
-    { id: 'waste', label: 'Waste', icon: 'ti-trash', roles: ['kitchen', 'admin'] },
+    { id: 'waste', label: 'Waste', icon: 'ti-trash', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'invoice', label: 'Check invoice', icon: 'ti-file-check', roles: ['manager', 'admin'] },
     { id: 'products', label: 'Products', icon: 'ti-list', roles: ['admin'] },
   ];
