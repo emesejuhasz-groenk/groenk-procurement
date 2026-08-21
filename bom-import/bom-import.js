@@ -62,8 +62,8 @@ async function airtableGetAll(table) {
 
 async function airtableCreateMany(table, fieldsArray) {
   const results = [];
-  for (let i = 0; i < fieldsArray.length; i += 50) {
-    const chunk = fieldsArray.slice(i, i + 50);
+  for (let i = 0; i < fieldsArray.length; i += 25) {
+    const chunk = fieldsArray.slice(i, i + 25);
     const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(table)}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}`, 'Content-Type': 'application/json' },
@@ -79,8 +79,8 @@ async function airtableCreateMany(table, fieldsArray) {
 async function airtableUpdateMany(table, updates) {
   // updates: [{ id, fields }]
   const results = [];
-  for (let i = 0; i < updates.length; i += 50) {
-    const chunk = updates.slice(i, i + 50);
+  for (let i = 0; i < updates.length; i += 25) {
+    const chunk = updates.slice(i, i + 25);
     const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(table)}`, {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}`, 'Content-Type': 'application/json' },
