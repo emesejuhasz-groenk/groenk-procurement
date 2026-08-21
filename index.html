@@ -272,6 +272,13 @@ function AccessCodeScreen({ staffApi, onLogin }) {
   const [code, setCode] = useState('');
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
+  const [pendingEmployee, setPendingEmployee] = useState(null); // set when a location choice is needed
+
+  function employeeLocations(fields) {
+    const raw = fields['Location'];
+    const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    return list.filter(l => RESTAURANTS.includes(l));
+  }
 
   async function submit() {
     const trimmed = code.trim();
@@ -281,18 +288,45 @@ function AccessCodeScreen({ staffApi, onLogin }) {
       const employees = await staffApi.getAll('Employees');
       const match = employees.find(e => (e.fields['Access Code'] || '').trim() === trimmed && e.fields['Active'] !== false);
       if (!match) { setError('Code not recognized, or account inactive.'); return; }
-      const location = match.fields['Location'];
-      if (!RESTAURANTS.includes(location)) {
+      const locations = employeeLocations(match.fields);
+      if (!locations.length) {
         setError('This employee has no matching restaurant location set up. Contact admin.');
         return;
       }
-      onLogin({
-        name: match.fields['Name'] || 'Staff',
-        role: mapEmployeeToAppRole(match.fields),
-        restaurant: location,
-      });
+      if (locations.length === 1) {
+        onLogin({ name: match.fields['Name'] || 'Staff', role: mapEmployeeToAppRole(match.fields), restaurant: locations[0] });
+      } else {
+        setPendingEmployee({ fields: match.fields, locations });
+      }
     } catch(e) { setError('Error: ' + e.message); }
     finally { setChecking(false); }
+  }
+
+  function pickLocation(loc) {
+    onLogin({ name: pendingEmployee.fields['Name'] || 'Staff', role: mapEmployeeToAppRole(pendingEmployee.fields), restaurant: loc });
+  }
+
+  if (pendingEmployee) {
+    return (
+      <div>
+        <div className="app-header">
+          <div className="app-header-top">
+            <div><h1>Grøenk</h1><div className="app-subtitle">Procurement</div></div>
+          </div>
+        </div>
+        <div className="content" style={{ maxWidth: 380, margin: '1rem auto' }}>
+          <div className="section-label" style={{ marginBottom: 10 }}>Which location are you working today?</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {pendingEmployee.locations.map(loc => (
+              <button key={loc} className="btn-secondary" onClick={() => pickLocation(loc)}>{loc}</button>
+            ))}
+          </div>
+          <button className="btn-ghost" style={{ marginTop: 14, width: '100%' }} onClick={() => setPendingEmployee(null)}>
+            ← Back
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
