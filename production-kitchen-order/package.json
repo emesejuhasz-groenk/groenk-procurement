@@ -1,0 +1,14 @@
+{
+  "name": "groenk-production-kitchen-order",
+  "version": "1.0.0",
+  "private": true,
+  "description": "T+2 auto-order script for the Grøenk Production Kitchen",
+  "main": "production-kitchen-order.js",
+  "scripts": {
+    "start": "node production-kitchen-order.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "nodemailer": "^6.9.14"
+  }
+}
