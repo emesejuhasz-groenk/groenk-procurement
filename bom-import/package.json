@@ -1,0 +1,12 @@
+{
+  "name": "groenk-bom-import",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-off script to reconcile the Recipes (BOM) Airtable table against Emese's corrected spreadsheet",
+  "scripts": {
+    "import": "node bom-import.js"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}
