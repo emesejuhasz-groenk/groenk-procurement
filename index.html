@@ -146,6 +146,20 @@ const BASE_ID = 'appPcdy4HEJuDOF4j';
 const STAFF_BASE_ID = 'appVFkDBFTLIsqtlN';
 const RESTAURANTS = ['Soller - Groenk Pizza', 'Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Groenk Production Kitchen Fornalutx'];
 
+// The Production Kitchen has TWO roles, modeled as two separate Locations records:
+// - "Retail" role (recZespbXJli9GI4r): it also buys raw ingredients from suppliers and holds
+//   its own stock, just like the 3 restaurants — this is the id used for Inventory/Waste below.
+// - "Production" role (recdj6jH7StWpJYum): it produces batches for the other units, linked to
+//   Production Plan — this id is reserved for the upcoming T+2 auto-order feature, not used yet.
+const LOCATION_IDS = {
+  'Soller - Groenk Pizza': 'reckUG4DXrJTMYtte',
+  'Deia - Groenk Bistro': 'recnoXjgMS7jPYgE7',
+  'Fornalutx - Groenk Bistro': 'recyfcAwYYZgFzSyd',
+  'Groenk Production Kitchen Fornalutx': 'recZespbXJli9GI4r', // Retail role
+};
+const PRODUCTION_KITCHEN_PRODUCTION_ROLE_ID = 'recdj6jH7StWpJYum'; // Production role — for the T+2 auto-order feature
+const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Other'];
+
 // Maps an Employees record (Role + Department) to this app's permission level.
 function mapEmployeeToAppRole(fields) {
   const role = fields['Role'] || '';
@@ -885,6 +899,186 @@ function ProductsScreen({ api }) {
   );
 }
 
+function InventoryScreen({ user, api }) {
+  const [products, setProducts] = useState([]);
+  const [txns, setTxns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(null);
+  const [counts, setCounts] = useState({});
+  const [location, setLocation] = useState(user.restaurant);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [p, t] = await Promise.all([api.getAll('Products'), api.getAll('Inventory Transactions')]);
+      setProducts(p.filter(x => x.fields['Active'] !== false));
+      setTxns(t);
+    } catch(e) { alert('Error: ' + e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  const locationId = LOCATION_IDS[location];
+  function currentStock(productId) {
+    return txns
+      .filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId))
+      .reduce((sum, t) => {
+        const qty = Number(t.fields['Quantity']) || 0;
+        const type = t.fields['Type'];
+        if (type === 'Waste') return sum - Math.abs(qty);
+        return sum + qty; // Opening Count, Delivery Received, Manual Adjustment (signed)
+      }, 0);
+  }
+
+  async function saveCount(productId) {
+    const val = counts[productId];
+    if (val === undefined || val === '') return;
+    const newCount = Number(val);
+    const delta = newCount - currentStock(productId);
+    if (delta === 0) { setCounts(c => { const n = { ...c }; delete n[productId]; return n; }); return; }
+    setSaving(productId);
+    try {
+      await api.create('Inventory Transactions', {
+        'Date': new Date().toISOString().slice(0,10),
+        'Type': 'Manual Adjustment',
+        'Quantity': delta,
+        'Related Product': [productId],
+        'Location': [locationId],
+        'Transaction Added By': user.name,
+        'Notes': 'Manual count',
+      });
+      const t2 = await api.getAll('Inventory Transactions');
+      setTxns(t2);
+      setCounts(c => { const n = { ...c }; delete n[productId]; return n; });
+    } catch(e) { alert('Error: ' + e.message); }
+    finally { setSaving(null); }
+  }
+
+  if (loading) return <div className="content"><Loader /></div>;
+  return (
+    <div className="content">
+      {user.role === 'admin' && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <div className="section-label">Location</div>
+          <select value={location} onChange={e => setLocation(e.target.value)}>
+            {RESTAURANTS.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+      )}
+      {products.map(p => {
+        const stock = currentStock(p.id);
+        const editing = counts[p.id] !== undefined;
+        return (
+          <div key={p.id} className="product-row">
+            <div>
+              <div className="product-name">{p.fields['Name']}</div>
+              <div className="product-unit">{p.fields['Unit']} · in stock: {stock}</div>
+            </div>
+            <div className="qty-controls">
+              {editing ? (
+                <>
+                  <input type="number" inputMode="decimal" step="0.01" placeholder="count" value={counts[p.id]}
+                    onChange={e => setCounts(c => ({ ...c, [p.id]: e.target.value }))}
+                    className="qty-input" style={{ width: 64 }} />
+                  <button className="qty-btn" onClick={() => saveCount(p.id)} disabled={saving === p.id}>
+                    {saving === p.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <i className="ti ti-check" style={{ fontSize: 14 }}></i>}
+                  </button>
+                </>
+              ) : (
+                <button style={{ fontSize: 11, padding: '6px 10px', minHeight: 30 }} onClick={() => setCounts(c => ({ ...c, [p.id]: String(stock) }))}>
+                  Update count
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function WasteScreen({ user, api }) {
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [productId, setProductId] = useState('');
+  const [qty, setQty] = useState('');
+  const [reason, setReason] = useState(WASTE_REASONS[0]);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [recent, setRecent] = useState([]);
+
+  async function load() {
+    try {
+      const [p, t] = await Promise.all([api.getAll('Products'), api.getAll('Inventory Transactions')]);
+      setProducts(p.filter(x => x.fields['Active'] !== false));
+      if (p.length) setProductId(p[0].id);
+      const locationId = LOCATION_IDS[user.restaurant];
+      setRecent(t.filter(x => x.fields['Type'] === 'Waste' && (x.fields['Location'] || []).includes(locationId))
+        .sort((a,b) => (b.fields['Date'] || '').localeCompare(a.fields['Date'] || '')).slice(0, 8));
+    } catch(e) { alert('Error: ' + e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function submitWaste() {
+    if (!productId || !qty || Number(qty) <= 0) return;
+    setSaving(true);
+    try {
+      await api.create('Inventory Transactions', {
+        'Date': new Date().toISOString().slice(0,10),
+        'Type': 'Waste',
+        'Quantity': Number(qty),
+        'Related Product': [productId],
+        'Location': [LOCATION_IDS[user.restaurant]],
+        'Waste Reason': reason,
+        'Notes': notes,
+        'Transaction Added By': user.name,
+      });
+      setQty(''); setNotes(''); setReason(WASTE_REASONS[0]);
+      await load();
+    } catch(e) { alert('Error: ' + e.message); }
+    finally { setSaving(false); }
+  }
+
+  if (loading) return <div className="content"><Loader /></div>;
+  return (
+    <div className="content">
+      <div className="card">
+        <div className="section-label">Product</div>
+        <select value={productId} onChange={e => setProductId(e.target.value)} style={{ marginBottom: 12 }}>
+          {products.map(p => <option key={p.id} value={p.id}>{p.fields['Name']} ({p.fields['Unit']})</option>)}
+        </select>
+        <div className="section-label">Quantity wasted</div>
+        <input type="number" inputMode="decimal" step="0.01" min="0" placeholder="0" value={qty} onChange={e => setQty(e.target.value)} style={{ marginBottom: 12 }} />
+        <div className="section-label">Reason</div>
+        <select value={reason} onChange={e => setReason(e.target.value)} style={{ marginBottom: 12 }}>
+          {WASTE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <div className="section-label">Details (optional)</div>
+        <input type="text" placeholder="e.g. fish went off, delivery too early" value={notes} onChange={e => setNotes(e.target.value)} style={{ marginBottom: 14 }} />
+        <button className="btn-primary" onClick={submitWaste} disabled={!productId || !qty || saving}>
+          {saving ? <span className="spinner"></span> : 'Log waste'}
+        </button>
+      </div>
+
+      {recent.length > 0 && (
+        <div style={{ marginTop: '1.5rem' }}>
+          <div className="section-label" style={{ marginBottom: 8 }}>Recent waste at {user.restaurant}</div>
+          {recent.map(t => {
+            const prod = products.find(p => (t.fields['Related Product'] || []).includes(p.id));
+            return (
+              <div key={t.id} className="card card-muted" style={{ padding: '10px 14px', marginBottom: 6 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--petrol)' }}>{t.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.fields['Date']} · {t.fields['Waste Reason']}{t.fields['Notes'] ? ` · ${t.fields['Notes']}` : ''}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 const DELIVERY_SCHEDULE = {
@@ -992,7 +1186,9 @@ function App() {
     { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin'] },
     { id: 'pending', label: 'Open orders', icon: 'ti-clock', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'delivery', label: 'Receive goods', icon: 'ti-truck', roles: ['kitchen', 'admin'] },
+    { id: 'inventory', label: 'Inventory', icon: 'ti-clipboard-list', roles: ['kitchen', 'admin'] },
     { id: 'info', label: 'Info', icon: 'ti-info-circle', roles: ['kitchen', 'admin', 'manager'] },
+    { id: 'waste', label: 'Waste', icon: 'ti-trash', roles: ['kitchen', 'admin'] },
     { id: 'invoice', label: 'Check invoice', icon: 'ti-file-check', roles: ['manager', 'admin'] },
     { id: 'products', label: 'Products', icon: 'ti-list', roles: ['admin'] },
   ];
@@ -1025,7 +1221,9 @@ function App() {
       {tab === 'new' && <NewOrderScreen user={user} api={api} />}
       {tab === 'pending' && <PendingOrdersScreen user={user} api={api} />}
       {tab === 'delivery' && <DeliveryScreen user={user} api={api} />}
+      {tab === 'inventory' && <InventoryScreen user={user} api={api} />}
       {tab === 'info' && <InfoScreen />}
+      {tab === 'waste' && <WasteScreen user={user} api={api} />}
       {tab === 'invoice' && <InvoiceScreen api={api} />}
       {tab === 'products' && <ProductsScreen api={api} />}
     </div>
