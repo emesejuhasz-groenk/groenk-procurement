@@ -196,7 +196,9 @@ async function main() {
     for (const [productId, avg] of Object.entries(avgConsumption)) {
       const par = avg * BUFFER_MULTIPLIER;
       const stock = currentStock(productId, locationId);
-      const qty = Math.max(0, Math.round(par - stock));
+      // Always round UP, never to nearest — under-ordering a batch-produced item (a whole
+      // cake, a kg of dressing) means running out; a small surplus is the safer error.
+      const qty = Math.max(0, Math.ceil(par - stock));
       if (qty > 0) restaurantResult[productId] = qty;
     }
     results[restaurantName] = restaurantResult;
