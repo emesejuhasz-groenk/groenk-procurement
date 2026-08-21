@@ -135,15 +135,34 @@ async function main() {
   const pkProductIds = new Set(pkProducts.map(p => p.id));
 
   // Group BOM rows by Menu Item, keeping only components that are Production-Kitchen products.
+  // ---------- Unit conversion ----------
+  // Recipes (BOM) usually store per-portion quantities in small units (g, ml), while
+  // Products are stocked/ordered in bulk units (kg, l). Without this conversion, raw
+  // BOM numbers get summed as if they were already in the product's own order unit,
+  // producing wildly inflated results (e.g. grams treated as kilograms).
+  const WEIGHT_TO_GRAMS = { g: 1, gr: 1, kg: 1000 };
+  const VOLUME_TO_ML = { ml: 1, cl: 10, l: 1000, liter: 1000, litre: 1000 };
+  function convertQty(qty, fromUnit, toUnit) {
+    const f = String(fromUnit || '').toLowerCase().trim();
+    const t = String(toUnit || '').toLowerCase().trim();
+    if (f === t) return qty;
+    if (WEIGHT_TO_GRAMS[f] && WEIGHT_TO_GRAMS[t]) return qty * WEIGHT_TO_GRAMS[f] / WEIGHT_TO_GRAMS[t];
+    if (VOLUME_TO_ML[f] && VOLUME_TO_ML[t]) return qty * VOLUME_TO_ML[f] / VOLUME_TO_ML[t];
+    // Count-based units ('unit', 'Pcs', 'db', 'box/caja'...) aren't convertible — treat as 1:1.
+    return qty;
+  }
+  const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
+
   const bomByMenuItem = {};
   for (const r of recipes) {
     const menuItemIds = r.fields['Menu Item'] || [];
     const componentIds = r.fields['Component (Product)'] || [];
     const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
+    const bomUnit = r.fields['Unit'] || 'unit';
     for (const miId of menuItemIds) {
       for (const compId of componentIds) {
         if (!pkProductIds.has(compId)) continue;
-        (bomByMenuItem[miId] = bomByMenuItem[miId] || []).push({ productId: compId, qtyPerUnit });
+        (bomByMenuItem[miId] = bomByMenuItem[miId] || []).push({ productId: compId, qtyPerUnit, bomUnit });
       }
     }
   }
@@ -187,8 +206,9 @@ async function main() {
     for (const [miId, avgUnits] of Object.entries(avgUnitsSold)) {
       const bom = bomByMenuItem[miId];
       if (!bom) continue;
-      for (const { productId, qtyPerUnit } of bom) {
-        avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * qtyPerUnit;
+      for (const { productId, qtyPerUnit, bomUnit } of bom) {
+        const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId]);
+        avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
       }
     }
 
