@@ -24,20 +24,20 @@
  *      Pizza / Total, so the production kitchen chef can prep from one file.
  *
  * Required environment variables (set as GitHub Actions secrets):
- *   AIRTABLE_TOKEN     — Personal Access Token, scoped to base appPcdy4HEJuDOF4j
- *                        with read+write (data.records:read, data.records:write)
- *   GMAIL_USER         — productionkitchengroenk@gmail.com
- *   GMAIL_APP_PASSWORD — Gmail App Password for that account
+ *   AIRTABLE_TOKEN   — Personal Access Token, scoped to base appPcdy4HEJuDOF4j
+ *                      with read+write (data.records:read, data.records:write)
+ *   RESEND_API_KEY   — API key from resend.com (sign up with
+ *                      productionkitchengroenk@gmail.com so the free sandbox
+ *                      sender can email that same address without domain setup)
  */
 
 const ExcelJS = require('exceljs');
-const nodemailer = require('nodemailer');
 
 const BASE_ID = 'appPcdy4HEJuDOF4j';
 const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN;
-const GMAIL_USER = process.env.GMAIL_USER;
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const EMAIL_TO = 'productionkitchengroenk@gmail.com';
+const EMAIL_FROM = 'onboarding@resend.dev'; // Resend's shared sandbox sender — works with no domain setup as long as EMAIL_TO matches the Resend account's own signup address
 
 const BUFFER_MULTIPLIER = 1.2;
 const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
@@ -50,8 +50,8 @@ const RESTAURANTS = {
   'Soller - Groenk Pizza': 'reckUG4DXrJTMYtte',
 };
 
-if (!AIRTABLE_TOKEN || !GMAIL_USER || !GMAIL_APP_PASSWORD) {
-  console.error('Missing required environment variables. Need AIRTABLE_TOKEN, GMAIL_USER, GMAIL_APP_PASSWORD.');
+if (!AIRTABLE_TOKEN || !RESEND_API_KEY) {
+  console.error('Missing required environment variables. Need AIRTABLE_TOKEN, RESEND_API_KEY.');
   process.exit(1);
 }
 
@@ -261,28 +261,32 @@ async function main() {
 
   const buffer = await workbook.xlsx.writeBuffer();
 
-  // ---------- Send email ----------
+  // ---------- Send email via Resend ----------
 
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
+  const base64Attachment = buffer.toString('base64');
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [EMAIL_TO],
+      subject: `Production Kitchen Order — ${targetDateStr}`,
+      text: allProductIds.size
+        ? `Attached: suggested order for ${targetDateStr} (T+2), by restaurant and total.`
+        : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold.`,
+      attachments: allProductIds.size ? [{
+        filename: `production-kitchen-order-${targetDateStr}.xlsx`,
+        content: base64Attachment,
+      }] : [],
+    }),
   });
+  const emailResult = await res.json();
+  if (!res.ok) throw new Error(`Resend send failed: ${JSON.stringify(emailResult)}`);
 
-  await transporter.sendMail({
-    from: GMAIL_USER,
-    to: EMAIL_TO,
-    subject: `Production Kitchen Order — ${targetDateStr}`,
-    text: allProductIds.size
-      ? `Attached: suggested order for ${targetDateStr} (T+2), by restaurant and total.`
-      : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold.`,
-    attachments: allProductIds.size ? [{
-      filename: `production-kitchen-order-${targetDateStr}.xlsx`,
-      content: buffer,
-      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    }] : [],
-  });
-
-  console.log('Email sent to', EMAIL_TO);
+  console.log('Email sent to', EMAIL_TO, '— Resend id:', emailResult.id);
 }
 
 main().catch(err => {
