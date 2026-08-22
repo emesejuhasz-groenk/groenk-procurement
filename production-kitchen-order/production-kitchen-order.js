@@ -1,27 +1,37 @@
 /**
- * Grøenk — Production Kitchen T+2 auto-order
+ * Grøenk — Production Kitchen T+1 auto-order
  *
  * Runs daily (via GitHub Actions cron). For each of the 3 restaurants
  * (Deià, Fornalutx, Sóller Pizza), computes a suggested order quantity for
  * every product supplied by "Groenk Production Kitchen":
  *
- *   avg = historical average consumption for the TARGET WEEKDAY
- *         (Daily Sales × Recipes(BOM), same weekday as target date, all
- *         available history since data collection started)
- *   par = avg * 1.2                      (buffer, per Emese: +20%)
- *   order qty = max(0, round(par - current stock))
+ *   avg = average daily consumption over the LAST 2 CALENDAR DAYS with Daily
+ *         Sales data (no weekday-matching — demand is fairly stable day to
+ *         day in Mallorca, per Emese) × Recipes(BOM)
+ *   par = avg * days to cover * 1.2            (buffer, +20%)
+ *   order qty = max(0, ceil(par - current stock))   (always rounds UP)
  *   current stock = Inventory Transactions ledger sum (Opening Count +
  *                   Delivery Received + Manual Adjustment - Waste)
  *
- * Target date = run date + 2 days (T+2).
+ * Target date = run date + 1 day (T+1). The Production Kitchen delivers
+ * Tuesday–Sunday (NOT Monday), so:
+ *   - if today is Sunday, the T+1 target would be Monday — there's no
+ *     Monday delivery, so the script exits without doing anything (Monday's
+ *     actual order gets computed by the normal run the next morning, T+1
+ *     from Monday = Tuesday)
+ *   - if today is Saturday, the T+1 target is Sunday, but that delivery has
+ *     to cover BOTH Sunday and Monday (2 days) since nothing arrives again
+ *     until Tuesday
+ *   - every other day covers exactly 1 day
  *
  * Output:
  *   1. Creates an Order + Order Items record per restaurant in Airtable
  *      (Supplier = Groenk Production Kitchen) so they show up in the
  *      Procurement app's "Receive goods" screen exactly like a normal order.
  *   2. Sends ONE email to productionkitchengroenk@gmail.com with an XLSX
- *      attachment: rows = products, columns = Deià / Fornalutx / Sóller
- *      Pizza / Total, so the production kitchen chef can prep from one file.
+ *      attachment: rows = products (grouped by Order Category), columns =
+ *      Deià / Fornalutx / Sóller Pizza / Total, so the production kitchen
+ *      chef can prep from one file.
  *
  * Required environment variables (set as GitHub Actions secrets):
  *   AIRTABLE_TOKEN   — Personal Access Token, scoped to base appPcdy4HEJuDOF4j
@@ -117,10 +127,19 @@ function addDays(date, n) {
 
 async function main() {
   const today = new Date();
-  const targetDate = addDays(today, 2);
+  const targetDate = addDays(today, 1);
   const targetDateStr = isoDate(targetDate);
   const targetWeekday = targetDate.getDay(); // 0=Sun..6=Sat
-  console.log(`Run date: ${isoDate(today)} — target (T+2) date: ${targetDateStr} (weekday ${targetWeekday})`);
+  console.log(`Run date: ${isoDate(today)} — target (T+1) date: ${targetDateStr} (weekday ${targetWeekday})`);
+
+  if (targetWeekday === 1) {
+    console.log('Target date is a Monday — Production Kitchen does not deliver on Mondays. Nothing to do; Tuesday\'s order will be computed by tomorrow\'s (Monday) run instead.');
+    return;
+  }
+  // Saturday's run (target = Sunday) has to cover Sunday AND Monday, since there's no
+  // Monday delivery to top up again before Tuesday.
+  const daysToCover = targetWeekday === 0 ? 2 : 1;
+  console.log(`Days to cover: ${daysToCover}`);
 
   const [products, recipes, dailySales, invTxns, locations] = await Promise.all([
     airtableGetAll('Products'),
@@ -179,17 +198,20 @@ async function main() {
   // results[restaurantName][productId] = order quantity
   const results = {};
   for (const [restaurantName, locationId] of Object.entries(RESTAURANTS)) {
-    // Historical Daily Sales for this location, matching the target weekday.
+    // Use the last 2 calendar days that have Daily Sales data for this location — no
+    // weekday-matching, since demand is fairly stable day to day here (per Emese).
     const salesForLocation = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
-    const matchingWeekdaySales = salesForLocation.filter(s => {
-      const d = s.fields['Date'];
-      if (!d) return false;
-      return new Date(d + 'T00:00:00').getDay() === targetWeekday;
-    });
+    const recentDates = [...new Set(salesForLocation.map(s => s.fields['Date']).filter(Boolean))]
+      .sort()
+      .reverse()
+      .slice(0, 2);
+    const recentSales = salesForLocation.filter(s => recentDates.includes(s.fields['Date']));
+    console.log(`${restaurantName}: using last-2-days average from ${recentDates.join(', ') || '(no data)'}`);
 
-    // avgUnitsSold[menuItemId] = average Units sold across matching-weekday dates
+    // avgUnitsSold[menuItemId] = total units sold across those dates / number of dates
+    // (fixed denominator, so a day with zero sales for an item still pulls the average down)
     const salesByMenuItem = {};
-    for (const s of matchingWeekdaySales) {
+    for (const s of recentSales) {
       const miIds = s.fields['Menu Item'] || [];
       const units = Number(s.fields['Units sold']) || 0;
       for (const miId of miIds) {
@@ -197,8 +219,9 @@ async function main() {
       }
     }
     const avgUnitsSold = {};
+    const denom = recentDates.length || 1;
     for (const [miId, arr] of Object.entries(salesByMenuItem)) {
-      avgUnitsSold[miId] = arr.reduce((a, b) => a + b, 0) / arr.length;
+      avgUnitsSold[miId] = arr.reduce((a, b) => a + b, 0) / denom;
     }
 
     // Aggregate average ingredient consumption per Production-Kitchen product.
@@ -214,7 +237,7 @@ async function main() {
 
     const restaurantResult = {};
     for (const [productId, avg] of Object.entries(avgConsumption)) {
-      const par = avg * BUFFER_MULTIPLIER;
+      const par = avg * daysToCover * BUFFER_MULTIPLIER;
       const stock = currentStock(productId, locationId);
       // Always round UP, never to nearest — under-ordering a batch-produced item (a whole
       // cake, a kg of dressing) means running out; a small surplus is the safer error.
@@ -235,7 +258,7 @@ async function main() {
       'Supplier': [PRODUCTION_KITCHEN_SUPPLIER_ID],
       'Restaurant': restaurantName,
       'Status': 'Pending',
-      'Created By': 'Auto (T+2)',
+      'Created By': 'Auto (T+1)',
     });
     await airtableCreateMany('Order Items', items.map(([productId, qty]) => ({
       'Order': [order.id],
@@ -317,7 +340,7 @@ async function main() {
       to: [EMAIL_TO],
       subject: `Production Kitchen Order — ${targetDateStr}`,
       text: allProductIds.size
-        ? `Attached: suggested order for ${targetDateStr} (T+2), by restaurant and total.`
+        ? `Attached: suggested order for ${targetDateStr} (T+1${daysToCover === 2 ? ', covering Sun+Mon since there is no Monday delivery' : ''}), by restaurant and total.`
         : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold.`,
       attachments: allProductIds.size ? [{
         filename: `production-kitchen-order-${targetDateStr}.xlsx`,
