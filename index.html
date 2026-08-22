@@ -159,6 +159,7 @@ const LOCATION_IDS = {
 };
 const PRODUCTION_KITCHEN_PRODUCTION_ROLE_ID = 'recdj6jH7StWpJYum'; // Production role — for the T+2 auto-order feature
 const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Other'];
+const CATEGORY_ORDER = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
 
 // Maps an Employees record (Role + Department) to this app's permission level.
 function mapEmployeeToAppRole(fields) {
@@ -1006,37 +1007,51 @@ function InventoryScreen({ user, api }) {
       {suppliers.map(s => {
         const ps = products.filter(p => (p.fields['Supplier'] || []).includes(s.id));
         if (!ps.length) return null;
+        const hasCategories = ps.some(p => p.fields['Order Category']);
+        const byName = (a, b) => (a.fields['Name'] || '').trim().localeCompare((b.fields['Name'] || '').trim());
+        const groups = hasCategories
+          ? CATEGORY_ORDER.map(cat => ({ cat, items: ps.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byName) })).filter(g => g.items.length)
+          : [{ cat: null, items: [...ps].sort(byName) }];
         return (
           <div key={s.id} style={{ marginBottom: 20 }}>
             <div className="section-label" style={{ marginBottom: 6 }}>{s.fields['Name']}</div>
-            {ps.map(p => {
-              const stock = currentStock(p.id);
-              const editing = counts[p.id] !== undefined;
-              return (
-                <div key={p.id} className="product-row">
-                  <div>
-                    <div className="product-name">{p.fields['Name']}</div>
-                    <div className="product-unit">{p.fields['Unit']} · in stock: {stock}</div>
+            {groups.map(g => (
+              <div key={g.cat || 'all'}>
+                {g.cat && (
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '10px 0 4px' }}>
+                    {g.cat}
                   </div>
-                  <div className="qty-controls">
-                    {editing ? (
-                      <>
-                        <input type="number" inputMode="decimal" step="0.01" placeholder="count" value={counts[p.id]}
-                          onChange={e => setCounts(c => ({ ...c, [p.id]: e.target.value }))}
-                          className="qty-input" style={{ width: 64 }} />
-                        <button className="qty-btn" onClick={() => saveCount(p.id)} disabled={saving === p.id}>
-                          {saving === p.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <i className="ti ti-check" style={{ fontSize: 14 }}></i>}
-                        </button>
-                      </>
-                    ) : (
-                      <button style={{ fontSize: 11, padding: '6px 10px', minHeight: 30 }} onClick={() => setCounts(c => ({ ...c, [p.id]: String(stock) }))}>
-                        Update count
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                )}
+                {g.items.map(p => {
+                  const stock = currentStock(p.id);
+                  const editing = counts[p.id] !== undefined;
+                  return (
+                    <div key={p.id} className="product-row">
+                      <div>
+                        <div className="product-name">{p.fields['Name']}</div>
+                        <div className="product-unit">{p.fields['Unit']} · in stock: {stock}</div>
+                      </div>
+                      <div className="qty-controls">
+                        {editing ? (
+                          <>
+                            <input type="number" inputMode="decimal" step="0.01" placeholder="count" value={counts[p.id]}
+                              onChange={e => setCounts(c => ({ ...c, [p.id]: e.target.value }))}
+                              className="qty-input" style={{ width: 64 }} />
+                            <button className="qty-btn" onClick={() => saveCount(p.id)} disabled={saving === p.id}>
+                              {saving === p.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <i className="ti ti-check" style={{ fontSize: 14 }}></i>}
+                            </button>
+                          </>
+                        ) : (
+                          <button style={{ fontSize: 11, padding: '6px 10px', minHeight: 30 }} onClick={() => setCounts(c => ({ ...c, [p.id]: String(stock) }))}>
+                            Update count
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         );
       })}
