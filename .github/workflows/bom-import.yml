@@ -22,4 +22,4 @@ jobs:
       - name: Run BOM import
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
-        run: node bom-import.js Groenk_Item_List_from_Recipes_0821.xlsx
+        run: node bom-import.js Groenk_Item_List_from_Recipes_drinks_pizzeria.xlsx
