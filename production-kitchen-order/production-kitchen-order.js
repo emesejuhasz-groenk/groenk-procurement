@@ -309,6 +309,7 @@ async function main() {
   for (const cat of CATEGORY_ORDER) {
     const rows = byCategory[cat];
     if (!rows || !rows.length) continue;
+    rows.sort((a, b) => a.product.trim().localeCompare(b.product.trim()));
     const headerRow = sheet.addRow({ product: cat });
     headerRow.font = { bold: true };
     headerRow.eachCell(cell => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E8E8' } }; });
