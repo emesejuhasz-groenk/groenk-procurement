@@ -96,7 +96,12 @@ async function airtableUpdateMany(table, updates) {
 // ---------- Name matching ----------
 
 function norm(s) {
-  return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip accents (Galícia -> Galicia)
+    .trim()
+    .replace(/\s*\/\s*/g, ' / ') // normalize "x/y", "x /y", "x/ y" -> "x / y"
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 }
 
 // Parses a quantity cell like "40 gr", "1 unit", "1 Pcs", "5l every day / restaurant".
@@ -124,7 +129,17 @@ async function main() {
   const workbook = XLSX.readFile(filePath);
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-  const dataRows = rows.slice(1); // skip header row
+  const headerRow = rows[0] || [];
+  const dataRows = rows.slice(1);
+
+  // Find "Ingredient Name.1" in the header instead of hardcoding a column index —
+  // different exports have had different numbers of leading columns.
+  let ingredientStartCol = headerRow.findIndex(h => String(h || '').trim() === 'Ingredient Name.1');
+  if (ingredientStartCol === -1) {
+    console.log('Could not find "Ingredient Name.1" in the header row — falling back to column index 2.');
+    ingredientStartCol = 2;
+  }
+  console.log(`Ingredient columns start at index ${ingredientStartCol} (0-based).`);
 
   console.log(`Read ${dataRows.length} rows from ${filePath}`);
 
@@ -136,6 +151,23 @@ async function main() {
 
   const menuItemByName = new Map(menuItems.map(m => [norm(m.fields['Name']), m.id]));
   const productByName = new Map(products.map(p => [norm(p.fields['Name']), p.id]));
+
+  // Finds every Menu Item that plausibly matches posName: exact match first; if none,
+  // falls back to substring overlap (either name contains the other), so the same drink
+  // recorded under slightly different per-location wording (e.g. "Obalo glass" /
+  // "Obalo copa") all get linked to the same recipe instead of only the first match.
+  function findMenuItemIds(posName) {
+    const n = norm(posName);
+    const exact = menuItemByName.get(n);
+    if (exact) return [exact];
+    const matches = [];
+    for (const m of menuItems) {
+      const mn = norm(m.fields['Name']);
+      if (!mn || mn.length < 5) continue; // avoid short names spuriously matching as substrings
+      if (mn.includes(n) || n.includes(mn)) matches.push(m.id);
+    }
+    return matches;
+  }
 
   // existingBomKey(menuItemId, productId) -> bom record id, for update-vs-create decisions
   const bomByKey = new Map();
@@ -154,11 +186,11 @@ async function main() {
   for (const row of dataRows) {
     const posName = row[1]; // "Item name in the daily report from POS"
     if (!posName) continue;
-    const menuItemId = menuItemByName.get(norm(posName));
-    if (!menuItemId) { unmatchedMenuItems.add(posName); continue; }
+    const menuItemIds = findMenuItemIds(posName);
+    if (!menuItemIds.length) { unmatchedMenuItems.add(posName); continue; }
 
     // Ingredient Name.N is at columns 3,5,7,... (0-indexed) / Quantity.N right after it
-    for (let col = 3; col < row.length; col += 2) {
+    for (let col = ingredientStartCol; col < row.length; col += 2) {
       const ingredientName = row[col];
       const quantityCell = row[col + 1];
       if (!ingredientName) continue;
@@ -172,17 +204,19 @@ async function main() {
         continue;
       }
 
-      const key = `${menuItemId}|${productId}`;
-      const existingId = bomByKey.get(key);
-      const fields = {
-        'Quantity per unit': parsed.value,
-        'Unit': parsed.unit,
-      };
-      if (existingId) {
-        toUpdate.push({ id: existingId, fields });
-      } else {
-        toCreate.push({ ...fields, 'Menu Item': [menuItemId], 'Component (Product)': [productId] });
-        bomByKey.set(key, 'pending'); // avoid creating duplicates for repeated rows in the same run
+      for (const menuItemId of menuItemIds) {
+        const key = `${menuItemId}|${productId}`;
+        const existingId = bomByKey.get(key);
+        const fields = {
+          'Quantity per unit': parsed.value,
+          'Unit': parsed.unit,
+        };
+        if (existingId) {
+          toUpdate.push({ id: existingId, fields });
+        } else {
+          toCreate.push({ ...fields, 'Menu Item': [menuItemId], 'Component (Product)': [productId] });
+          bomByKey.set(key, 'pending'); // avoid creating duplicates for repeated rows in the same run
+        }
       }
     }
   }
