@@ -1,4 +1,4 @@
-name: Production Kitchen T+2 auto-order
+name: Production Kitchen T+1 auto-order
 
 on:
   schedule:
@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run T+2 order script
+      - name: Run T+1 order script
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
