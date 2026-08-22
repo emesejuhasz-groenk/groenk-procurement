@@ -160,17 +160,81 @@ async function main() {
   // BOM numbers get summed as if they were already in the product's own order unit,
   // producing wildly inflated results (e.g. grams treated as kilograms).
   const WEIGHT_TO_GRAMS = { g: 1, gr: 1, kg: 1000 };
-  const VOLUME_TO_ML = { ml: 1, cl: 10, l: 1000, liter: 1000, litre: 1000 };
-  function convertQty(qty, fromUnit, toUnit) {
+  const VOLUME_TO_ML = { ml: 1, cl: 10, dl: 100, l: 1000, liter: 1000, litre: 1000 };
+
+  // Products sold as individual bottles that get packed into boxes. bottleMl = size of
+  // one bottle in ml, boxBottles = bottles per box (mirrors Products."Pack Size", kept
+  // here explicitly since the script also needs the per-bottle ml, which isn't itself
+  // an Airtable field). Add new bottled drinks here as they come up.
+  const BOTTLE_PRODUCTS = {
+    'rec0GG6FuoGVhppOX': { bottleMl: 750, boxBottles: 6 },  // Cruz De Alba Tinto Roble
+    'recr5eRYcQ9DjtF8N': { bottleMl: 750, boxBottles: 12 }, // K Naia Verdejo-Sauvig Blanc
+    'recNPOqxkKjbxruPm': { bottleMl: 750, boxBottles: 6 },  // Cava M.Manz.Paloma Minguez
+    'recfaXavJa7Mfn95b': { bottleMl: 750, boxBottles: 6 },  // Groenk La Isla Bonita Wine
+    'recOur09D12vya1TO': { bottleMl: 750, boxBottles: 6 },  // Paco&Lola Albarino Blanco
+    'recFkhzAQHnJQFOv6': { bottleMl: 750, boxBottles: 6 },  // Can Gelat White
+    'recqcp3W6BLYP7HLz': { bottleMl: 750, boxBottles: 6 },  // Mucho Más red wine
+    'recbmyjGTpXCAgRdf': { bottleMl: 750, boxBottles: 6 },  // Macia Batle 1856 Negre
+    'recvWB7SPBW8yCbyw': { bottleMl: 750, boxBottles: 6 },  // Can Gelat Gran Vi Red
+    'rectHW7Se1XBPFbF7': { bottleMl: 750, boxBottles: 6 },  // Obalo Rosado
+    'recuDpwaPhpDe5Qh0': { bottleMl: 750, boxBottles: 6 },  // Can Gelat Rosé
+    'rec5lgdtonSCCuXKn': { bottleMl: 750, boxBottles: 6 },  // Roda I Reserva
+    'recBZqhgUHiq9bP1d': { bottleMl: 500, boxBottles: 6 },  // Gin Groenk
+    'recYff3VN3LLhBP3R': { bottleMl: 700, boxBottles: 6 },  // Pampelle Aperitif
+    'recJVtCM5aKx3fkUs': { bottleMl: 700, boxBottles: 6 },  // Amargero
+    'recO3hYm1bTCEbHwE': { bottleMl: 750, boxBottles: 6 },  // André Clouet Brut Gran Reserva
+    'recLnrqeL5oKywzpO': { bottleMl: 750, boxBottles: 6 },  // Lanson champagne
+  };
+  // Products sold from a bulk-liter box (no discrete "bottle" — syrups, bag-in-box). litersPerBox.
+  const BULK_LITER_PRODUCTS = {
+    'recQuqcE97aPWh9gx': 3,  // Cordial Elderflower
+    'recQZGUy989QpkbZe': 3,  // Cordial Strawberry
+    'recJmkJvH3IRDwWrc': 3,  // Cordial Ginger
+    'recoPQdKRSxB8nKEt': 3,  // Cordial Mango
+    'recMaHap0Kptnyc8N': 10, // Vermouth Flors de Collserola
+  };
+  // Draught products, ordered by the keg. litersPerKeg.
+  const KEG_PRODUCTS = {
+    'recg4kyyl1P4ionxe': 30, // EG Barril 30L
+  };
+
+  function convertQty(qty, fromUnit, toUnit, productId) {
     const f = String(fromUnit || '').toLowerCase().trim();
     const t = String(toUnit || '').toLowerCase().trim();
     if (f === t) return qty;
+
     if (WEIGHT_TO_GRAMS[f] && WEIGHT_TO_GRAMS[t]) return qty * WEIGHT_TO_GRAMS[f] / WEIGHT_TO_GRAMS[t];
     if (VOLUME_TO_ML[f] && VOLUME_TO_ML[t]) return qty * VOLUME_TO_ML[f] / VOLUME_TO_ML[t];
+
+    const bottleInfo = BOTTLE_PRODUCTS[productId];
+    if (bottleInfo && t.includes('box')) {
+      const bottles = f === 'bottle' ? qty : (VOLUME_TO_ML[f] ? (qty * VOLUME_TO_ML[f]) / bottleInfo.bottleMl : qty);
+      return bottles / bottleInfo.boxBottles;
+    }
+
+    const litersPerBox = BULK_LITER_PRODUCTS[productId];
+    if (litersPerBox && (t.includes('box') || t.includes('pack'))) {
+      const ml = VOLUME_TO_ML[f] ? qty * VOLUME_TO_ML[f] : qty * 1000; // assume liters if unit unrecognized
+      return ml / 1000 / litersPerBox;
+    }
+
+    const litersPerKeg = KEG_PRODUCTS[productId];
+    if (litersPerKeg && VOLUME_TO_ML[f]) {
+      return (qty * VOLUME_TO_ML[f]) / 1000 / litersPerKeg;
+    }
+
+    // Garnish-style packs (straws, dried orange slices): BOM in piece/slice, Product ordered
+    // by the pack — use the Product's own Pack Size (pieces per pack) directly.
+    if ((f === 'piece' || f === 'slice') && (t.includes('pack') || t === 'unit')) {
+      const packSize = Number(productPackSizeById[productId]) || null;
+      if (packSize) return qty / packSize;
+    }
+
     // Count-based units ('unit', 'Pcs', 'db', 'box/caja'...) aren't convertible — treat as 1:1.
     return qty;
   }
   const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
+  const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
 
   const bomByMenuItem = {};
   for (const r of recipes) {
@@ -230,7 +294,7 @@ async function main() {
       const bom = bomByMenuItem[miId];
       if (!bom) continue;
       for (const { productId, qtyPerUnit, bomUnit } of bom) {
-        const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId]);
+        const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId);
         avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
       }
     }
