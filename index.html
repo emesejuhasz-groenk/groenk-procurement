@@ -158,6 +158,7 @@ const LOCATION_IDS = {
   'Groenk Production Kitchen Fornalutx': 'recZespbXJli9GI4r', // Retail role
 };
 const PRODUCTION_KITCHEN_PRODUCTION_ROLE_ID = 'recdj6jH7StWpJYum'; // Production role — for the T+2 auto-order feature
+const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
 const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Other'];
 const CATEGORY_ORDER = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
 
@@ -658,11 +659,43 @@ function DeliveryScreen({ user, api }) {
   async function markDelivered() {
     setSaving(true);
     try {
+      const today = new Date().toISOString().slice(0,10);
+      const receivingLocationId = LOCATION_IDS[order.fields['Restaurant']];
+      const isFromProductionKitchen = sup?.id === PRODUCTION_KITCHEN_SUPPLIER_ID;
+
       for (const item of items) {
         const qty = receivedQty[item.id] !== undefined && receivedQty[item.id] !== '' ? Number(receivedQty[item.id]) : Number(item.fields['Quantity']);
         await api.update('Order Items', item.id, { 'Received': !!checks[item.id], 'Delivery Note': notes[item.id] || '', 'Received Qty': qty });
+
+        if (checks[item.id] && qty > 0) {
+          const productId = (item.fields['Product'] || [])[0];
+          if (productId && receivingLocationId) {
+            await api.create('Inventory Transactions', {
+              'Date': today,
+              'Type': 'Delivery Received',
+              'Quantity': qty,
+              'Related Product': [productId],
+              'Location': [receivingLocationId],
+              'Transaction Added By': user.name,
+              'Notes': `Received from ${sup?.fields['Name'] || 'supplier'} (Order ${order.id})`,
+            });
+          }
+          // The Production Kitchen holds its own stock (Retail role) — shipping goods out
+          // to a restaurant draws it down, just like a restaurant's own consumption would.
+          if (productId && isFromProductionKitchen) {
+            await api.create('Inventory Transactions', {
+              'Date': today,
+              'Type': 'Manual Adjustment',
+              'Quantity': -qty,
+              'Related Product': [productId],
+              'Location': [LOCATION_IDS['Groenk Production Kitchen Fornalutx']],
+              'Transaction Added By': user.name,
+              'Notes': `Shipped to ${order.fields['Restaurant']} (Order ${order.id})`,
+            });
+          }
+        }
       }
-      await api.update('Orders', order.id, { 'Status': 'Delivered', 'Delivery Date': new Date().toISOString().slice(0,10) });
+      await api.update('Orders', order.id, { 'Status': 'Delivered', 'Delivery Date': today });
       setOrders(o => o.filter(x => x.id !== order.id));
       setSelected(null); setChecks({}); setNotes({}); setReceivedQty({});
     } catch(e) { alert('Error: ' + e.message); }
