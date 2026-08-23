@@ -1,0 +1,31 @@
+name: Weekly Inventory Audit
+
+on:
+  schedule:
+    # 06:00 Madrid (CEST, UTC+2) = 04:00 UTC, every Saturday.
+    # NOTE: same DST caveat as the other scheduled workflows — in winter
+    # (CET, UTC+1) this will actually fire at 05:00 Madrid time, not 06:00.
+    - cron: '0 4 * * 6'
+  workflow_dispatch: {} # lets you trigger it manually from the Actions tab to test
+
+jobs:
+  send-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./inventory-audit
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run weekly audit script
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: npm start
