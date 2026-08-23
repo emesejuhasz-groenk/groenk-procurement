@@ -1,0 +1,12 @@
+{
+  "name": "groenk-weekly-inventory-audit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Weekly manual-inventory-count audit for Grøenk — flags corrections that came in lower than the system-expected stock",
+  "scripts": {
+    "start": "node weekly-inventory-audit.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}
