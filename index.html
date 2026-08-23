@@ -969,6 +969,32 @@ function ProductsScreen({ api }) {
   );
 }
 
+// Products where staff physically count in a different unit than the product's own
+// stocking unit — e.g. they see individual bottles on the shelf, not fractional boxes;
+// they see cake slices left, not fractions of a whole cake. countUnit is the label shown
+// to staff; countsPerStockUnit is how many of that count unit make up 1 stock unit.
+const INVENTORY_COUNT_OVERRIDE = {
+  'rec0GG6FuoGVhppOX': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Cruz De Alba Tinto Roble
+  'recr5eRYcQ9DjtF8N': { countUnit: 'bottles', countsPerStockUnit: 12 }, // K Naia Verdejo-Sauvig Blanc
+  'recNPOqxkKjbxruPm': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Cava M.Manz.Paloma Minguez
+  'recfaXavJa7Mfn95b': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Groenk La Isla Bonita Wine
+  'recOur09D12vya1TO': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Paco&Lola Albarino Blanco
+  'recFkhzAQHnJQFOv6': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Can Gelat White
+  'recqcp3W6BLYP7HLz': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Mucho Más red wine
+  'recbmyjGTpXCAgRdf': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Macia Batle 1856 Negre
+  'recvWB7SPBW8yCbyw': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Can Gelat Gran Vi Red
+  'rectHW7Se1XBPFbF7': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Obalo Rosado
+  'recuDpwaPhpDe5Qh0': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Can Gelat Rosé
+  'rec5lgdtonSCCuXKn': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Roda I Reserva
+  'recBZqhgUHiq9bP1d': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Gin Groenk
+  'recYff3VN3LLhBP3R': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Pampelle Aperitif
+  'recJVtCM5aKx3fkUs': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Amargero
+  'recO3hYm1bTCEbHwE': { countUnit: 'bottles', countsPerStockUnit: 6 },  // André Clouet
+  'recLnrqeL5oKywzpO': { countUnit: 'bottles', countsPerStockUnit: 6 },  // Lanson champagne
+  'recBvrzCWkxQhuDDH': { countUnit: 'slices', countsPerStockUnit: 8 },   // Cheesecake (whole)
+  'recvXeXGdfb30PXd5': { countUnit: 'slices', countsPerStockUnit: 10 }, // Carrot Cake (whole)
+};
+
 function InventoryScreen({ user, api }) {
   const [products, setProducts] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
@@ -1005,7 +1031,9 @@ function InventoryScreen({ user, api }) {
   async function saveCount(productId) {
     const val = counts[productId];
     if (val === undefined || val === '') return;
-    const newCount = Number(val);
+    const override = INVENTORY_COUNT_OVERRIDE[productId];
+    const enteredCount = Number(val);
+    const newCount = override ? enteredCount / override.countsPerStockUnit : enteredCount;
     const delta = newCount - currentStock(productId);
     if (delta === 0) { setCounts(c => { const n = { ...c }; delete n[productId]; return n; }); return; }
     setSaving(productId);
@@ -1017,7 +1045,7 @@ function InventoryScreen({ user, api }) {
         'Related Product': [productId],
         'Location': [locationId],
         'Transaction Added By': user.name,
-        'Notes': 'Manual count',
+        'Notes': override ? `Manual count (${enteredCount} ${override.countUnit})` : 'Manual count',
       });
       const t2 = await api.getAll('Inventory Transactions');
       setTxns(t2);
@@ -1058,11 +1086,14 @@ function InventoryScreen({ user, api }) {
                 {g.items.map(p => {
                   const stock = currentStock(p.id);
                   const editing = counts[p.id] !== undefined;
+                  const override = INVENTORY_COUNT_OVERRIDE[p.id];
+                  const displayUnit = override ? override.countUnit : p.fields['Unit'];
+                  const displayStock = override ? Math.round(stock * override.countsPerStockUnit * 100) / 100 : stock;
                   return (
                     <div key={p.id} className="product-row">
                       <div>
                         <div className="product-name">{p.fields['Name']}</div>
-                        <div className="product-unit">{p.fields['Unit']} · in stock: {stock}</div>
+                        <div className="product-unit">{displayUnit} · in stock: {displayStock}</div>
                       </div>
                       <div className="qty-controls">
                         {editing ? (
@@ -1075,7 +1106,7 @@ function InventoryScreen({ user, api }) {
                             </button>
                           </>
                         ) : (
-                          <button style={{ fontSize: 11, padding: '6px 10px', minHeight: 30 }} onClick={() => setCounts(c => ({ ...c, [p.id]: String(stock) }))}>
+                          <button style={{ fontSize: 11, padding: '6px 10px', minHeight: 30 }} onClick={() => setCounts(c => ({ ...c, [p.id]: String(displayStock) }))}>
                             Update count
                           </button>
                         )}
