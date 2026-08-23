@@ -32,7 +32,7 @@ const ExcelJS = require('exceljs');
 const BASE_ID = 'appPcdy4HEJuDOF4j';
 const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const EMAIL_TO = 'controlling@groenk.com';
+const EMAIL_TO = 'productionkitchengroenk@gmail.com';
 const EMAIL_FROM = 'onboarding@resend.dev';
 
 const LOOKBACK_DAYS = 7;
