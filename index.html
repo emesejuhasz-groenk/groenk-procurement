@@ -163,7 +163,7 @@ const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Other'
 const CATEGORY_ORDER = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
 
 // ---------- Shared unit conversion (same logic as production-kitchen-order.js) ----------
-const WEIGHT_TO_GRAMS = { g: 1, gr: 1, kg: 1000 };
+const WEIGHT_TO_GRAMS = { g: 1, gr: 1, gramm: 1, kg: 1000 };
 const VOLUME_TO_ML = { ml: 1, cl: 10, dl: 100, l: 1000, liter: 1000, litre: 1000 };
 const BOTTLE_PRODUCTS = {
   'rec0GG6FuoGVhppOX': { bottleMl: 750, boxBottles: 6 },
@@ -192,7 +192,7 @@ const BULK_LITER_PRODUCTS = {
 };
 const KEG_PRODUCTS = { 'recg4kyyl1P4ionxe': 30 };
 
-function convertQty(qty, fromUnit, toUnit, productId) {
+function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) {
   const f = String(fromUnit || '').toLowerCase().trim();
   const t = String(toUnit || '').toLowerCase().trim();
   if (f === t) return qty;
@@ -210,7 +210,25 @@ function convertQty(qty, fromUnit, toUnit, productId) {
   }
   const litersPerKeg = KEG_PRODUCTS[productId];
   if (litersPerKeg && VOLUME_TO_ML[f]) return (qty * VOLUME_TO_ML[f]) / 1000 / litersPerKeg;
-  return qty;
+
+  // Generic weight-based package conversion, read live from each Product's own
+  // "Weight per Unit (g)" field — e.g. Panko (10000 g/bag), Harina (1000 g/bag).
+  if (WEIGHT_TO_GRAMS[f] && weightPerUnitG) {
+    const grams = qty * WEIGHT_TO_GRAMS[f];
+    return grams / weightPerUnitG;
+  }
+
+  // Generic count-based package conversion, read live from each Product's own "Pack
+  // Size" field — e.g. straws (100/pack), eggs (30/carton), carrots (25/tray).
+  const startedAsWeightOrVolume = WEIGHT_TO_GRAMS[f] !== undefined || VOLUME_TO_ML[f] !== undefined;
+  if (!startedAsWeightOrVolume && packSize) return qty / packSize;
+
+  // Plain count-unit label mismatches ('piece' vs 'unit') safely pass through 1:1. But if
+  // we started from an actual weight/volume amount and found no confident path to the
+  // product's own order unit, don't silently pass the raw number through — signal
+  // "unreliable" so the caller can skip it instead of showing a wildly wrong suggestion.
+  const startedAsWeightOrVolume = WEIGHT_TO_GRAMS[f] !== undefined || VOLUME_TO_ML[f] !== undefined;
+  return startedAsWeightOrVolume ? null : qty;
 }
 
 const ORDER_SUGGESTION_BUFFER = 1.2;
@@ -427,6 +445,7 @@ function NewOrderScreen({ user, api }) {
   const [supplierId, setSupplierId] = useState('');
   const [quantities, setQuantities] = useState({});
   const [suggested, setSuggested] = useState({});
+  const [skippedCount, setSkippedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sent, setSent] = useState(null);
@@ -469,7 +488,8 @@ function NewOrderScreen({ user, api }) {
   // logic as the Production Kitchen T+1 script: last-2-days average consumption (via
   // Recipes BOM) x 1.2 buffer, minus current stock, always rounded up.
   function computeSuggestions() {
-    if (isProductionKitchen || !userLocationId) return {};
+    if (isProductionKitchen || !userLocationId) return { result: {}, unreliableCount: 0 };
+    const unreliableProducts = new Set();
     const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(userLocationId));
     const recentDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse().slice(0, 2);
     const recentSales = salesHere.filter(s => recentDates.includes(s.fields['Date']));
@@ -485,6 +505,8 @@ function NewOrderScreen({ user, api }) {
 
     const supplierProductIds = new Set(filteredProducts.map(p => p.id));
     const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
+    const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
+    const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
 
     const avgConsumption = {};
     for (const r of recipes) {
@@ -496,7 +518,8 @@ function NewOrderScreen({ user, api }) {
         const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
         const bomUnit = r.fields['Unit'] || 'unit';
         for (const productId of compIds) {
-          const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId);
+          const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId, productPackSizeById[productId], productWeightPerUnitById[productId]);
+          if (converted === null) { unreliableProducts.add(productId); continue; }
           avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
         }
       }
@@ -508,14 +531,15 @@ function NewOrderScreen({ user, api }) {
       const qty = Math.max(0, Math.ceil(par - currentStock(productId)));
       if (qty > 0) result[productId] = qty;
     }
-    return result;
+    return { result, unreliableCount: unreliableProducts.size };
   }
 
   useEffect(() => {
     if (loading) return;
-    const s = computeSuggestions();
-    setSuggested(s);
-    setQuantities(Object.fromEntries(Object.entries(s).map(([id, qty]) => [id, String(qty)])));
+    const { result, unreliableCount } = computeSuggestions();
+    setSuggested(result);
+    setSkippedCount(unreliableCount);
+    setQuantities(Object.fromEntries(Object.entries(result).map(([id, qty]) => [id, String(qty)])));
   }, [supplierId, loading]);
 
   const bump = (pid, delta) => {
@@ -550,6 +574,11 @@ function NewOrderScreen({ user, api }) {
         {isProductionKitchen && (
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
             Production Kitchen orders are generated automatically each morning — no suggestions here, but you can still add extra items manually.
+          </div>
+        )}
+        {!isProductionKitchen && skippedCount > 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-warning)', marginTop: 6 }}>
+            {skippedCount} product{skippedCount > 1 ? 's' : ''} on this list don't have a reliable suggestion yet (package size not set up) — enter those manually.
           </div>
         )}
       </div>
