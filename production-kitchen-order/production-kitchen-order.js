@@ -344,14 +344,15 @@ async function main() {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Order');
   sheet.columns = [
-    { header: 'Product', key: 'product', width: 32 },
-    { header: 'Unit', key: 'unit', width: 12 },
-    { header: 'Deià', key: 'deia', width: 10 },
-    { header: 'Fornalutx', key: 'fornalutx', width: 10 },
-    { header: 'Sóller Pizza', key: 'soller', width: 12 },
-    { header: 'Total', key: 'total', width: 10 },
+    { header: 'Product', key: 'product', width: 36 },
+    { header: 'Unit', key: 'unit', width: 14 },
+    { header: 'Deià', key: 'deia', width: 12 },
+    { header: 'Fornalutx', key: 'fornalutx', width: 12 },
+    { header: 'Sóller Pizza', key: 'soller', width: 14 },
+    { header: 'Total', key: 'total', width: 12 },
   ];
-  sheet.getRow(1).font = { bold: true };
+  sheet.getRow(1).font = { bold: true, size: 16 };
+  sheet.getRow(1).height = 22;
 
   const CATEGORY_ORDER = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
   const byCategory = {};
@@ -375,10 +376,11 @@ async function main() {
     if (!rows || !rows.length) continue;
     rows.sort((a, b) => a.product.trim().localeCompare(b.product.trim()));
     const headerRow = sheet.addRow({ product: cat });
-    headerRow.font = { bold: true };
+    headerRow.font = { bold: true, size: 15 };
+    headerRow.height = 20;
     headerRow.eachCell(cell => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E8E8' } }; });
     for (const row of rows) {
-      sheet.addRow({
+      const dataRow = sheet.addRow({
         product: row.product,
         unit: row.unit,
         deia: row.deia || '',
@@ -386,6 +388,8 @@ async function main() {
         soller: row.soller || '',
         total: row.total,
       });
+      dataRow.font = { size: 13 };
+      dataRow.height = 18;
     }
   }
 
