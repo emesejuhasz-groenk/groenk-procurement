@@ -162,6 +162,59 @@ const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Productio
 const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Other'];
 const CATEGORY_ORDER = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
 
+// ---------- Shared unit conversion (same logic as production-kitchen-order.js) ----------
+const WEIGHT_TO_GRAMS = { g: 1, gr: 1, kg: 1000 };
+const VOLUME_TO_ML = { ml: 1, cl: 10, dl: 100, l: 1000, liter: 1000, litre: 1000 };
+const BOTTLE_PRODUCTS = {
+  'rec0GG6FuoGVhppOX': { bottleMl: 750, boxBottles: 6 },
+  'recr5eRYcQ9DjtF8N': { bottleMl: 750, boxBottles: 12 },
+  'recNPOqxkKjbxruPm': { bottleMl: 750, boxBottles: 6 },
+  'recfaXavJa7Mfn95b': { bottleMl: 750, boxBottles: 6 },
+  'recOur09D12vya1TO': { bottleMl: 750, boxBottles: 6 },
+  'recFkhzAQHnJQFOv6': { bottleMl: 750, boxBottles: 6 },
+  'recqcp3W6BLYP7HLz': { bottleMl: 750, boxBottles: 6 },
+  'recbmyjGTpXCAgRdf': { bottleMl: 750, boxBottles: 6 },
+  'recvWB7SPBW8yCbyw': { bottleMl: 750, boxBottles: 6 },
+  'rectHW7Se1XBPFbF7': { bottleMl: 750, boxBottles: 6 },
+  'recuDpwaPhpDe5Qh0': { bottleMl: 750, boxBottles: 6 },
+  'rec5lgdtonSCCuXKn': { bottleMl: 750, boxBottles: 6 },
+  'recBZqhgUHiq9bP1d': { bottleMl: 500, boxBottles: 6 },
+  'recYff3VN3LLhBP3R': { bottleMl: 700, boxBottles: 6 },
+  'recJVtCM5aKx3fkUs': { bottleMl: 700, boxBottles: 6 },
+  'recO3hYm1bTCEbHwE': { bottleMl: 750, boxBottles: 6 },
+  'recLnrqeL5oKywzpO': { bottleMl: 750, boxBottles: 6 },
+  'recrvnmrObLfFgOZO': { bottleMl: 200, boxBottles: 24 }, // Tónica Fever Tree 20cl C-24
+  'recLWTdCvXT0VPUoV': { bottleMl: 700, boxBottles: 12 }, // Taroncello
+};
+const BULK_LITER_PRODUCTS = {
+  'recQuqcE97aPWh9gx': 3, 'recQZGUy989QpkbZe': 3, 'recJmkJvH3IRDwWrc': 3, 'recoPQdKRSxB8nKEt': 3,
+  'recMaHap0Kptnyc8N': 10,
+};
+const KEG_PRODUCTS = { 'recg4kyyl1P4ionxe': 30 };
+
+function convertQty(qty, fromUnit, toUnit, productId) {
+  const f = String(fromUnit || '').toLowerCase().trim();
+  const t = String(toUnit || '').toLowerCase().trim();
+  if (f === t) return qty;
+  if (WEIGHT_TO_GRAMS[f] && WEIGHT_TO_GRAMS[t]) return qty * WEIGHT_TO_GRAMS[f] / WEIGHT_TO_GRAMS[t];
+  if (VOLUME_TO_ML[f] && VOLUME_TO_ML[t]) return qty * VOLUME_TO_ML[f] / VOLUME_TO_ML[t];
+  const bottleInfo = BOTTLE_PRODUCTS[productId];
+  if (bottleInfo && t.includes('box')) {
+    const bottles = f === 'bottle' ? qty : (VOLUME_TO_ML[f] ? (qty * VOLUME_TO_ML[f]) / bottleInfo.bottleMl : qty);
+    return bottles / bottleInfo.boxBottles;
+  }
+  const litersPerBox = BULK_LITER_PRODUCTS[productId];
+  if (litersPerBox && (t.includes('box') || t.includes('pack'))) {
+    const ml = VOLUME_TO_ML[f] ? qty * VOLUME_TO_ML[f] : qty * 1000;
+    return ml / 1000 / litersPerBox;
+  }
+  const litersPerKeg = KEG_PRODUCTS[productId];
+  if (litersPerKeg && VOLUME_TO_ML[f]) return (qty * VOLUME_TO_ML[f]) / 1000 / litersPerKeg;
+  return qty;
+}
+
+const ORDER_SUGGESTION_BUFFER = 1.2;
+
 // Maps an Employees record (Role + Department) to this app's permission level.
 function mapEmployeeToAppRole(fields) {
   const role = String(fields['Role'] || '').trim();
@@ -368,8 +421,12 @@ function AccessCodeScreen({ staffApi, onLogin }) {
 function NewOrderScreen({ user, api }) {
   const [suppliers, setSuppliers] = useState([]);
   const [products, setProducts] = useState([]);
+  const [recipes, setRecipes] = useState([]);
+  const [dailySales, setDailySales] = useState([]);
+  const [invTxns, setInvTxns] = useState([]);
   const [supplierId, setSupplierId] = useState('');
   const [quantities, setQuantities] = useState({});
+  const [suggested, setSuggested] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sent, setSent] = useState(null);
@@ -378,9 +435,15 @@ function NewOrderScreen({ user, api }) {
   useEffect(() => {
     async function load() {
       try {
-        const [sups, prods] = await Promise.all([api.getAll('Suppliers'), api.getAll('Products')]);
+        const [sups, prods, bom, sales, txns] = await Promise.all([
+          api.getAll('Suppliers'), api.getAll('Products'), api.getAll('Recipes (BOM)'),
+          api.getAll('Daily Sales'), api.getAll('Inventory Transactions'),
+        ]);
         setSuppliers(sups);
         setProducts(prods.filter(p => p.fields['Active'] !== false));
+        setRecipes(bom);
+        setDailySales(sales);
+        setInvTxns(txns);
         if (sups.length) setSupplierId(sups[0].id);
       } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
@@ -390,6 +453,71 @@ function NewOrderScreen({ user, api }) {
 
   const supplier = suppliers.find(s => s.id === supplierId);
   const filteredProducts = products.filter(p => (p.fields['Supplier'] || []).includes(supplierId));
+  const isProductionKitchen = supplierId === PRODUCTION_KITCHEN_SUPPLIER_ID;
+  const userLocationId = LOCATION_IDS[user.restaurant];
+
+  function currentStock(productId) {
+    return invTxns
+      .filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(userLocationId))
+      .reduce((sum, t) => {
+        const qty = Number(t.fields['Quantity']) || 0;
+        return t.fields['Type'] === 'Waste' ? sum - Math.abs(qty) : sum + qty;
+      }, 0);
+  }
+
+  // Computes a suggested order quantity per product for this supplier, using the same
+  // logic as the Production Kitchen T+1 script: last-2-days average consumption (via
+  // Recipes BOM) x 1.2 buffer, minus current stock, always rounded up.
+  function computeSuggestions() {
+    if (isProductionKitchen || !userLocationId) return {};
+    const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(userLocationId));
+    const recentDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse().slice(0, 2);
+    const recentSales = salesHere.filter(s => recentDates.includes(s.fields['Date']));
+    const denom = recentDates.length || 1;
+
+    const salesByMenuItem = {};
+    for (const s of recentSales) {
+      const units = Number(s.fields['Units sold']) || 0;
+      for (const miId of (s.fields['Menu Item'] || [])) (salesByMenuItem[miId] = salesByMenuItem[miId] || []).push(units);
+    }
+    const avgUnitsSold = {};
+    for (const [miId, arr] of Object.entries(salesByMenuItem)) avgUnitsSold[miId] = arr.reduce((a,b)=>a+b, 0) / denom;
+
+    const supplierProductIds = new Set(filteredProducts.map(p => p.id));
+    const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
+
+    const avgConsumption = {};
+    for (const r of recipes) {
+      const compIds = (r.fields['Component (Product)'] || []).filter(id => supplierProductIds.has(id));
+      if (!compIds.length) continue;
+      for (const miId of (r.fields['Menu Item'] || [])) {
+        const avgUnits = avgUnitsSold[miId];
+        if (!avgUnits) continue;
+        const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
+        const bomUnit = r.fields['Unit'] || 'unit';
+        for (const productId of compIds) {
+          const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId);
+          avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
+        }
+      }
+    }
+
+    const result = {};
+    for (const [productId, avg] of Object.entries(avgConsumption)) {
+      const par = avg * ORDER_SUGGESTION_BUFFER;
+      const qty = Math.max(0, Math.ceil(par - currentStock(productId)));
+      if (qty > 0) result[productId] = qty;
+    }
+    return result;
+  }
+
+  useEffect(() => {
+    if (loading) return;
+    const s = computeSuggestions();
+    setSuggested(s);
+    setQuantities(Object.fromEntries(Object.entries(s).map(([id, qty]) => [id, String(qty)])));
+  }, [supplierId, loading]);
+
   const bump = (pid, delta) => {
     const next = Math.max(0, Number(quantities[pid] || 0) + delta);
     setQuantities(q => ({ ...q, [pid]: next === 0 ? '' : String(next) }));
@@ -416,9 +544,14 @@ function NewOrderScreen({ user, api }) {
     <div className="content">
       <div style={{ marginBottom: '1.25rem' }}>
         <div className="section-label">Supplier</div>
-        <select value={supplierId} onChange={e => { setSupplierId(e.target.value); setQuantities({}); setSent(null); setOrderText(''); }}>
+        <select value={supplierId} onChange={e => { setSupplierId(e.target.value); setSent(null); setOrderText(''); }}>
           {suppliers.map(s => <option key={s.id} value={s.id}>{s.fields['Name']}</option>)}
         </select>
+        {isProductionKitchen && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+            Production Kitchen orders are generated automatically each morning — no suggestions here, but you can still add extra items manually.
+          </div>
+        )}
       </div>
 
       {filteredProducts.length === 0 ? (
@@ -427,11 +560,16 @@ function NewOrderScreen({ user, api }) {
         </div>
       ) : (
         <div>
-          {filteredProducts.map(p => (
+          {filteredProducts.map(p => {
+            const isSuggested = suggested[p.id] !== undefined && quantities[p.id] === String(suggested[p.id]);
+            return (
             <div key={p.id} className="product-row">
               <div>
                 <div className="product-name">{p.fields['Name']}</div>
-                <div className="product-unit">{p.fields['Unit']}</div>
+                <div className="product-unit">
+                  {p.fields['Unit']}
+                  {isSuggested && <span style={{ marginLeft: 6, color: 'var(--petrol)', fontWeight: 700 }}>· suggested</span>}
+                </div>
               </div>
               <div className="qty-controls">
                 <button className="qty-btn" onClick={() => bump(p.id, -1)}><i className="ti ti-minus" style={{ fontSize: 14 }}></i></button>
@@ -439,7 +577,8 @@ function NewOrderScreen({ user, api }) {
                 <button className="qty-btn" onClick={() => bump(p.id, 1)}><i className="ti ti-plus" style={{ fontSize: 14 }}></i></button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
