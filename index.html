@@ -227,7 +227,6 @@ function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) 
   // we started from an actual weight/volume amount and found no confident path to the
   // product's own order unit, don't silently pass the raw number through — signal
   // "unreliable" so the caller can skip it instead of showing a wildly wrong suggestion.
-  const startedAsWeightOrVolume = WEIGHT_TO_GRAMS[f] !== undefined || VOLUME_TO_ML[f] !== undefined;
   return startedAsWeightOrVolume ? null : qty;
 }
 
