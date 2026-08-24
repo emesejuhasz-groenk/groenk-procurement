@@ -159,7 +159,7 @@ async function main() {
   // Products are stocked/ordered in bulk units (kg, l). Without this conversion, raw
   // BOM numbers get summed as if they were already in the product's own order unit,
   // producing wildly inflated results (e.g. grams treated as kilograms).
-  const WEIGHT_TO_GRAMS = { g: 1, gr: 1, kg: 1000 };
+  const WEIGHT_TO_GRAMS = { g: 1, gr: 1, gramm: 1, kg: 1000 };
   const VOLUME_TO_ML = { ml: 1, cl: 10, dl: 100, l: 1000, liter: 1000, litre: 1000 };
 
   // Products sold as individual bottles that get packed into boxes. bottleMl = size of
@@ -223,18 +223,30 @@ async function main() {
       return (qty * VOLUME_TO_ML[f]) / 1000 / litersPerKeg;
     }
 
-    // Garnish-style packs (straws, dried orange slices): BOM in piece/slice, Product ordered
-    // by the pack — use the Product's own Pack Size (pieces per pack) directly.
-    if ((f === 'piece' || f === 'slice') && (t.includes('pack') || t === 'unit')) {
+    // Generic weight-based package conversion, read live from each Product's own
+    // "Weight per Unit (g)" field — e.g. Panko (10000 g/bag), Harina (1000 g/bag).
+    const weightPerUnitG = Number(productWeightPerUnitById[productId]) || null;
+    if (WEIGHT_TO_GRAMS[f] && weightPerUnitG) {
+      return (qty * WEIGHT_TO_GRAMS[f]) / weightPerUnitG;
+    }
+
+    // Generic count-based package conversion, read live from each Product's own "Pack
+    // Size" field — e.g. straws (100/pack), eggs (30/carton), carrots (25/tray).
+    const startedAsWeightOrVolume = WEIGHT_TO_GRAMS[f] !== undefined || VOLUME_TO_ML[f] !== undefined;
+    if (!startedAsWeightOrVolume) {
       const packSize = Number(productPackSizeById[productId]) || null;
       if (packSize) return qty / packSize;
     }
 
-    // Count-based units ('unit', 'Pcs', 'db', 'box/caja'...) aren't convertible — treat as 1:1.
-    return qty;
+    // Plain count-unit label mismatches ('unit' vs 'Pcs' vs 'db') safely pass through 1:1.
+    // But if we started from an actual weight/volume amount and found no confident path
+    // to the product's own order unit, don't silently pass the raw number through —
+    // signal "unreliable" so the caller can skip it instead of mis-ordering.
+    return startedAsWeightOrVolume ? null : qty;
   }
   const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
   const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
+  const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
 
   const bomByMenuItem = {};
   for (const r of recipes) {
@@ -295,6 +307,10 @@ async function main() {
       if (!bom) continue;
       for (const { productId, qtyPerUnit, bomUnit } of bom) {
         const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId);
+        if (converted === null) {
+          console.log(`Skipping ${productId}: no reliable conversion from "${bomUnit}" to "${productUnitById[productId]}" (missing pack size?)`);
+          continue;
+        }
         avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
       }
     }
