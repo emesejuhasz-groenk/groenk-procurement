@@ -479,7 +479,7 @@ function NewOrderScreen({ user, api }) {
       .filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(userLocationId))
       .reduce((sum, t) => {
         const qty = Number(t.fields['Quantity']) || 0;
-        return t.fields['Type'] === 'Waste' ? sum - Math.abs(qty) : sum + qty;
+        return (t.fields['Type'] === 'Waste' || t.fields['Type'] === 'Consumption') ? sum - Math.abs(qty) : sum + qty;
       }, 0);
   }
 
@@ -1192,7 +1192,7 @@ function InventoryScreen({ user, api }) {
       .reduce((sum, t) => {
         const qty = Number(t.fields['Quantity']) || 0;
         const type = t.fields['Type'];
-        if (type === 'Waste') return sum - Math.abs(qty);
+        if (type === 'Waste' || type === 'Consumption') return sum - Math.abs(qty);
         return sum + qty; // Opening Count, Delivery Received, Manual Adjustment (signed)
       }, 0);
   }
