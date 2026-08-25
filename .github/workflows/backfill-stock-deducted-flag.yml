@@ -1,0 +1,25 @@
+name: Backfill Daily Sales Stock-Deducted Flag (one-off)
+
+on:
+  workflow_dispatch: {} # manual trigger only — run this ONCE, then never again
+
+jobs:
+  backfill-flag:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./daily-consumption
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run backfill flag script
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+        run: node backfill-stock-deducted-flag.js
