@@ -124,7 +124,7 @@ async function main() {
       }
 
       // Keep the running balance current for every transaction type, same rule as the app.
-      balance += type === 'Waste' ? -Math.abs(qty) : qty;
+      balance += (type === 'Waste' || type === 'Consumption') ? -Math.abs(qty) : qty;
     }
   }
 
