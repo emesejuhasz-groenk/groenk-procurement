@@ -1,0 +1,32 @@
+name: Daily Stock Consumption Deduction
+
+on:
+  schedule:
+    # 06:30 Madrid (CEST, UTC+2) = 04:30 UTC, every day. Runs after the Cowork
+    # task (06:00) that imports the previous day's Daily Sales from the POS
+    # emails, so the sales data is already there by the time this runs.
+    # NOTE: same DST caveat as the other scheduled workflows - in winter
+    # (CET, UTC+1) this will actually fire at 05:30 Madrid time, not 06:30.
+    - cron: '30 4 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  deduct-consumption:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./daily-consumption
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run daily consumption deduction script
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+        run: npm start
