@@ -1,0 +1,10 @@
+{
+  "name": "groenk-daily-consumption-deduction",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deducts Daily Sales consumption from Inventory Transactions, via Recipes (BOM)",
+  "scripts": {
+    "start": "node daily-consumption-deduction.js"
+  },
+  "dependencies": {}
+}
