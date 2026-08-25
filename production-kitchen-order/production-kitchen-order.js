@@ -267,7 +267,7 @@ async function main() {
       .filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId))
       .reduce((sum, t) => {
         const qty = Number(t.fields['Quantity']) || 0;
-        return t.fields['Type'] === 'Waste' ? sum - Math.abs(qty) : sum + qty;
+        return (t.fields['Type'] === 'Waste' || t.fields['Type'] === 'Consumption') ? sum - Math.abs(qty) : sum + qty;
       }, 0);
   }
 
