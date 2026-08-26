@@ -49,7 +49,15 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const EMAIL_TO = 'productionkitchengroenk@gmail.com';
 const EMAIL_FROM = 'onboarding@resend.dev'; // Resend's shared sandbox sender — works with no domain setup as long as EMAIL_TO matches the Resend account's own signup address
 
-const BUFFER_MULTIPLIER = 1.2;
+const BUFFER_MULTIPLIER = 1.5;
+
+// TEMPORARY (a few weeks, starting 2026-08-27): order for TODAY (T) instead of
+// tomorrow (T+1), while stock / auto-order / receiving get back in sync after the
+// double-booking incident. Revert to 1 once things have settled.
+// NOTE: this shifts EVERY downstream date calculation (target date, weekday checks,
+// Monday-skip, Saturday double-coverage) by the same amount — no other code changes
+// needed elsewhere in this file.
+const TARGET_DAY_OFFSET = 0;
 const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
 
 // Restaurant app-name -> Locations table record id (Retail-role records; see index.html for the
@@ -127,10 +135,10 @@ function addDays(date, n) {
 
 async function main() {
   const today = new Date();
-  const targetDate = addDays(today, 1);
+  const targetDate = addDays(today, TARGET_DAY_OFFSET);
   const targetDateStr = isoDate(targetDate);
   const targetWeekday = targetDate.getDay(); // 0=Sun..6=Sat
-  console.log(`Run date: ${isoDate(today)} — target (T+1) date: ${targetDateStr} (weekday ${targetWeekday})`);
+  console.log(`Run date: ${isoDate(today)} — target (T+${TARGET_DAY_OFFSET}) date: ${targetDateStr} (weekday ${targetWeekday})`);
 
   if (targetWeekday === 1) {
     console.log('Target date is a Monday — Production Kitchen does not deliver on Mondays. Nothing to do; Tuesday\'s order will be computed by tomorrow\'s (Monday) run instead.');
@@ -330,7 +338,26 @@ async function main() {
 
   // ---------- Write Orders + Order Items to Airtable (so they appear in Receive Goods) ----------
 
+  // Guard against duplicate runs (e.g. the scheduled cron firing plus a manual
+  // "Run workflow" test on the same day): skip any restaurant that already has an
+  // Order from this supplier for this exact target date, regardless of who/what
+  // created it (Auto or manual), Pending or Delivered.
+  const existingOrders = await airtableGetAll('Orders');
+  const alreadyOrdered = new Set(
+    existingOrders
+      .filter(o => {
+        const supplierIds = o.fields['Supplier'] || [];
+        const orderDate = (o.fields['Order Date'] || '').slice(0, 10);
+        return supplierIds.includes(PRODUCTION_KITCHEN_SUPPLIER_ID) && orderDate === targetDateStr;
+      })
+      .map(o => o.fields['Restaurant'])
+  );
+
   for (const [restaurantName, productQtys] of Object.entries(results)) {
+    if (alreadyOrdered.has(restaurantName)) {
+      console.log(`Skipping ${restaurantName}: an order for ${targetDateStr} from Groenk Production Kitchen already exists (idempotency guard).`);
+      continue;
+    }
     const items = Object.entries(productQtys);
     if (!items.length) continue;
     const order = await airtableCreate('Orders', {
