@@ -1,5 +1,5 @@
 /**
- * Grøenk — Production Kitchen T+1 auto-order
+ * Grøenk — Production Kitchen auto-order
  *
  * Runs daily (via GitHub Actions cron). For each of the 3 restaurants
  * (Deià, Fornalutx, Sóller Pizza), computes a suggested order quantity for
@@ -8,13 +8,20 @@
  *   avg = average daily consumption over the LAST 2 CALENDAR DAYS with Daily
  *         Sales data (no weekday-matching — demand is fairly stable day to
  *         day in Mallorca, per Emese) × Recipes(BOM)
- *   par = avg * days to cover * 1.2            (buffer, +20%)
+ *   par = avg * days to cover * 1.5            (buffer, +50%)
  *   order qty = max(0, ceil(par - current stock))   (always rounds UP)
  *   current stock = Inventory Transactions ledger sum (Opening Count +
  *                   Delivery Received + Manual Adjustment - Waste)
  *
- * Target date = run date + 1 day (T+1). The Production Kitchen delivers
- * Tuesday–Sunday (NOT Monday), so:
+ * Target date = run date + TARGET_DAY_OFFSET days (see constant below).
+ * NORMALLY this is T+1 (order today for tomorrow's delivery), but it is
+ * TEMPORARILY set to T+0 (order today for TODAY's delivery) starting
+ * 2026-08-27, while stock / auto-order / receiving get back in sync after
+ * a double-booking incident. Revert TARGET_DAY_OFFSET to 1 once things
+ * have settled — nothing else in this file needs to change to switch back.
+ *
+ * Whichever mode is active, the Production Kitchen delivers Tuesday–Sunday
+ * (NOT Monday), so:
  *   - if today is Sunday, the T+1 target would be Monday — there's no
  *     Monday delivery, so the script exits without doing anything (Monday's
  *     actual order gets computed by the normal run the next morning, T+1
