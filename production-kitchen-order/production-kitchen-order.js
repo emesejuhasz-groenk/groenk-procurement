@@ -60,6 +60,29 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const EMAIL_TO = 'productionkitchengroenk@gmail.com';
 const EMAIL_FROM = 'onboarding@resend.dev'; // Resend's shared sandbox sender — works with no domain setup as long as EMAIL_TO matches the Resend account's own signup address
 
+// ---------- Email send guard ----------
+// The Airtable idempotency guard below only stops duplicate Orders — it does NOT stop
+// this script from re-sending the email every time it runs, which confused the kitchen
+// staff when a manual test run (or a scheduled run that GitHub Actions delayed by several
+// hours) fired outside the normal morning window.
+//
+// Rule: only actually send the email when this is a genuine SCHEDULED run (not a manual
+// "Run workflow" / workflow_dispatch test) AND it's still morning in Madrid. Everything
+// else (Airtable writes, xlsx build) still happens on every run, so manual runs remain
+// useful for testing/backfilling data — they just stay silent by default.
+// To deliberately test the email itself from a manual run, use "Run workflow" and set
+// the send_email input to true.
+const GITHUB_EVENT_NAME = process.env.GITHUB_EVENT_NAME || '';
+const SEND_EMAIL_OVERRIDE = process.env.SEND_EMAIL_OVERRIDE === 'true';
+const MORNING_CUTOFF_HOUR = 10; // Madrid local time; scheduled runs at/after this hour are treated as "not morning" and skip the email
+
+function madridHour(date) {
+  return parseInt(
+    new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', hour: '2-digit', hour12: false }).format(date),
+    10
+  );
+}
+
 const BUFFER_MULTIPLIER = 1.5;
 
 // TEMPORARY (a few weeks, starting 2026-08-27): order for TODAY (T) instead of
@@ -454,6 +477,19 @@ async function main() {
   const buffer = await workbook.xlsx.writeBuffer();
 
   // ---------- Send email via Resend ----------
+
+  const currentMadridHour = madridHour(today);
+  const isScheduledMorningRun = GITHUB_EVENT_NAME === 'schedule' && currentMadridHour < MORNING_CUTOFF_HOUR;
+  const shouldSendEmail = isScheduledMorningRun || SEND_EMAIL_OVERRIDE;
+
+  if (!shouldSendEmail) {
+    console.log(
+      `Skipping email send (event: "${GITHUB_EVENT_NAME}", Madrid hour: ${currentMadridHour}, override: ${SEND_EMAIL_OVERRIDE}). ` +
+      `Email only sends automatically on a scheduled run before ${MORNING_CUTOFF_HOUR}:00 Madrid time, ` +
+      `or on a manual run with the send_email input set to true. Airtable writes above (if any) still happened normally.`
+    );
+    return;
+  }
 
   const hasAnyOrders = restaurantNames.some(r => Object.keys(results[r]).length > 0);
   const offsetLabel = TARGET_DAY_OFFSET === 0 ? 'T (same-day)' : `T+${TARGET_DAY_OFFSET}`;
