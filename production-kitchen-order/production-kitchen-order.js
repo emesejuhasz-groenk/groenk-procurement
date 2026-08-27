@@ -74,7 +74,7 @@ const EMAIL_FROM = 'onboarding@resend.dev'; // Resend's shared sandbox sender �
 // the send_email input to true.
 const GITHUB_EVENT_NAME = process.env.GITHUB_EVENT_NAME || '';
 const SEND_EMAIL_OVERRIDE = process.env.SEND_EMAIL_OVERRIDE === 'true';
-const MORNING_CUTOFF_HOUR = 10; // Madrid local time; scheduled runs at/after this hour are treated as "not morning" and skip the email
+const MORNING_CUTOFF_HOUR = 10; // Madrid local time; scheduled runs at/after this hour still send, but the email gets a "this ran late" note appended
 
 function madridHour(date) {
   return parseInt(
@@ -478,19 +478,33 @@ async function main() {
 
   // ---------- Send email via Resend ----------
 
+  // IMPORTANT: a genuine scheduled run ALWAYS sends the email, no matter how late in the
+  // day it actually executes — GitHub Actions can delay scheduled runs by hours under load
+  // (this happened on 2026-08-27: the 07:00 cron didn't fire until 18:19). Silently skipping
+  // a late-but-real scheduled run would mean the kitchen gets NO order summary that day at
+  // all, which is worse than one arriving late. We only add a "this is late" note to the
+  // email itself so it's clear what happened, instead of leaving anyone to guess.
+  //
+  // Manual test runs (workflow_dispatch) stay silent by default regardless of time of day —
+  // that's what was actually causing the confusing extra emails (two manual test runs this
+  // morning, in addition to the delayed real one). Use the send_email input to opt in when
+  // you deliberately want to test the email itself.
   const currentMadridHour = madridHour(today);
-  const isScheduledMorningRun = GITHUB_EVENT_NAME === 'schedule' && currentMadridHour < MORNING_CUTOFF_HOUR;
-  const shouldSendEmail = isScheduledMorningRun || SEND_EMAIL_OVERRIDE;
+  const isLateRun = currentMadridHour >= MORNING_CUTOFF_HOUR;
+  const shouldSendEmail = GITHUB_EVENT_NAME === 'schedule' || SEND_EMAIL_OVERRIDE;
 
   if (!shouldSendEmail) {
     console.log(
-      `Skipping email send (event: "${GITHUB_EVENT_NAME}", Madrid hour: ${currentMadridHour}, override: ${SEND_EMAIL_OVERRIDE}). ` +
-      `Email only sends automatically on a scheduled run before ${MORNING_CUTOFF_HOUR}:00 Madrid time, ` +
-      `or on a manual run with the send_email input set to true. Airtable writes above (if any) still happened normally.`
+      `Skipping email send (event: "${GITHUB_EVENT_NAME}", override: ${SEND_EMAIL_OVERRIDE}). ` +
+      `Email only sends automatically on a scheduled run, or on a manual run with the ` +
+      `send_email input set to true. Airtable writes above (if any) still happened normally.`
     );
     return;
   }
 
+  const lateNote = isLateRun
+    ? ` (Note: this ran later than the usual morning time — around ${currentMadridHour}:00 Madrid time — most likely due to a GitHub Actions scheduling delay. The order contents are still correct.)`
+    : '';
   const hasAnyOrders = restaurantNames.some(r => Object.keys(results[r]).length > 0);
   const offsetLabel = TARGET_DAY_OFFSET === 0 ? 'T (same-day)' : `T+${TARGET_DAY_OFFSET}`;
   const base64Attachment = buffer.toString('base64');
@@ -504,9 +518,9 @@ async function main() {
       from: EMAIL_FROM,
       to: [EMAIL_TO],
       subject: `Production Kitchen Order — ${targetDateStr}`,
-      text: hasAnyOrders
+      text: (hasAnyOrders
         ? `Attached: suggested order for ${targetDateStr} (${offsetLabel}${daysToCover === 2 ? ', covering Sun+Mon since there is no Monday delivery' : ''}), by restaurant and total. The sheet always lists every Production Kitchen product; rows with nothing to order are left blank.`
-        : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold. Attached anyway for reference (all rows blank).`,
+        : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold. Attached anyway for reference (all rows blank).`) + lateNote,
       // Always attach — the sheet is the full PK product list every day, not just
       // days where something needs ordering.
       attachments: [{
