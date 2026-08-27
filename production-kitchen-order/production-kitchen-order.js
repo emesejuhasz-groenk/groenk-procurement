@@ -11,7 +11,12 @@
  *   par = avg * days to cover * 1.5            (buffer, +50%)
  *   order qty = max(0, ceil(par - current stock))   (always rounds UP)
  *   current stock = Inventory Transactions ledger sum (Opening Count +
- *                   Delivery Received + Manual Adjustment - Waste)
+ *                   Delivery Received + Manual Adjustment - Waste -
+ *                   Consumption). Consumption rows are written daily by the
+ *                   separate daily-consumption-deduction script, which turns
+ *                   the previous day's Daily Sales into ledger entries via
+ *                   the same BOM — so "current stock" here already reflects
+ *                   yesterday's sales, not just receiving/waste/manual counts.
  *
  * Target date = run date + TARGET_DAY_OFFSET days (see constant below).
  * NORMALLY this is T+1 (order today for tomorrow's delivery), but it is
@@ -21,15 +26,14 @@
  * have settled — nothing else in this file needs to change to switch back.
  *
  * Whichever mode is active, the Production Kitchen delivers Tuesday–Sunday
- * (NOT Monday), so:
- *   - if today is Sunday, the T+1 target would be Monday — there's no
- *     Monday delivery, so the script exits without doing anything (Monday's
- *     actual order gets computed by the normal run the next morning, T+1
- *     from Monday = Tuesday)
- *   - if today is Saturday, the T+1 target is Sunday, but that delivery has
- *     to cover BOTH Sunday and Monday (2 days) since nothing arrives again
- *     until Tuesday
- *   - every other day covers exactly 1 day
+ * (NOT Monday), checked against the TARGET date's weekday (so this adapts
+ * automatically whether TARGET_DAY_OFFSET is 0 or 1):
+ *   - if the target date is a Monday, there's no Monday delivery, so the
+ *     script exits without doing anything for that restaurant/day — the
+ *     next day's run will compute Tuesday's order instead
+ *   - if the target date is a Sunday, that delivery has to cover BOTH
+ *     Sunday and Monday (2 days) since nothing arrives again until Tuesday
+ *   - every other target weekday covers exactly 1 day
  *
  * Output:
  *   1. Creates an Order + Order Items record per restaurant in Airtable
@@ -199,6 +203,8 @@ async function main() {
     'recJVtCM5aKx3fkUs': { bottleMl: 700, boxBottles: 6 },  // Amargero
     'recO3hYm1bTCEbHwE': { bottleMl: 750, boxBottles: 6 },  // André Clouet Brut Gran Reserva
     'recLnrqeL5oKywzpO': { bottleMl: 750, boxBottles: 6 },  // Lanson champagne
+    'recrvnmrObLfFgOZO': { bottleMl: 200, boxBottles: 24 }, // Tónica Fever Tree 20cl C-24 (not PK-supplied today, kept for parity with index.html / daily-consumption-deduction.js)
+    'recLWTdCvXT0VPUoV': { bottleMl: 700, boxBottles: 12 }, // Taroncello (not PK-supplied today, kept for parity)
   };
   // Products sold from a bulk-liter box (no discrete "bottle" — syrups, bag-in-box). litersPerBox.
   const BULK_LITER_PRODUCTS = {
