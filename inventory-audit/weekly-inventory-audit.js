@@ -1,10 +1,14 @@
 /**
  * Grøenk — Weekly Inventory Audit
  *
- * Runs every Saturday at 06:00 (Madrid). Looks at every "Manual Adjustment"
- * Inventory Transaction from the last 7 days (i.e. every time someone used
- * "Update count" in the Procurement app's Inventory screen to correct the
- * system-computed stock with what they physically counted) and reports:
+ * Runs every Friday at 12:00 (Madrid) — one hour after staff finish entering
+ * the physical count into the app that morning (11:00-12:00, their first
+ * task of the day, before any same-day receiving/waste can contaminate the
+ * comparison; changed from Saturday 06:00 on 2026-08-27). Looks at every
+ * "Manual Adjustment" Inventory Transaction from the last 7 days (i.e. every
+ * time someone used "Update count" in the Procurement app's Inventory screen
+ * to correct the system-computed stock with what they physically counted)
+ * and reports:
  *
  *   Date | Location | Product | System qty | Manually counted qty | Difference | Counted by
  *
