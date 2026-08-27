@@ -10,7 +10,12 @@ on:
     # one for winter) or a small time check inside the script that exits
     # early outside the intended local hour.
     - cron: '0 5 * * *'
-  workflow_dispatch: {} # lets you trigger it manually from the Actions tab to test
+  workflow_dispatch:
+    inputs:
+      send_email:
+        description: 'Actually send the email to the kitchen (leave off for silent testing)'
+        type: boolean
+        default: false
 
 jobs:
   send-order:
@@ -32,4 +37,6 @@ jobs:
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          SEND_EMAIL_OVERRIDE: ${{ github.event.inputs.send_email }}
         run: npm start
