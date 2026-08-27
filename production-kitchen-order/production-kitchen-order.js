@@ -388,8 +388,10 @@ async function main() {
 
   const productById = Object.fromEntries(products.map(p => [p.id, p.fields]));
   const restaurantNames = Object.keys(RESTAURANTS);
-  const allProductIds = new Set();
-  for (const r of restaurantNames) Object.keys(results[r]).forEach(id => allProductIds.add(id));
+  // Always list every product the Production Kitchen supplies, not just the ones with
+  // a nonzero suggestion right now — rows with nothing to order stay in the sheet with
+  // blank quantity cells, so the file is always a complete picture, never a partial one.
+  const allProductIds = pkProductIds;
 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Order');
@@ -436,7 +438,7 @@ async function main() {
         deia: row.deia || '',
         fornalutx: row.fornalutx || '',
         soller: row.soller || '',
-        total: row.total,
+        total: row.total || '',
       });
       dataRow.font = { size: 13 };
       dataRow.height = 18;
@@ -447,6 +449,8 @@ async function main() {
 
   // ---------- Send email via Resend ----------
 
+  const hasAnyOrders = restaurantNames.some(r => Object.keys(results[r]).length > 0);
+  const offsetLabel = TARGET_DAY_OFFSET === 0 ? 'T (same-day)' : `T+${TARGET_DAY_OFFSET}`;
   const base64Attachment = buffer.toString('base64');
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -458,13 +462,15 @@ async function main() {
       from: EMAIL_FROM,
       to: [EMAIL_TO],
       subject: `Production Kitchen Order — ${targetDateStr}`,
-      text: allProductIds.size
-        ? `Attached: suggested order for ${targetDateStr} (T+1${daysToCover === 2 ? ', covering Sun+Mon since there is no Monday delivery' : ''}), by restaurant and total.`
-        : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold.`,
-      attachments: allProductIds.size ? [{
+      text: hasAnyOrders
+        ? `Attached: suggested order for ${targetDateStr} (${offsetLabel}${daysToCover === 2 ? ', covering Sun+Mon since there is no Monday delivery' : ''}), by restaurant and total. The sheet always lists every Production Kitchen product; rows with nothing to order are left blank.`
+        : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold. Attached anyway for reference (all rows blank).`,
+      // Always attach — the sheet is the full PK product list every day, not just
+      // days where something needs ordering.
+      attachments: [{
         filename: `production-kitchen-order-${targetDateStr}.xlsx`,
         content: base64Attachment,
-      }] : [],
+      }],
     }),
   });
   const emailResult = await res.json();
