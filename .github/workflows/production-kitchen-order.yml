@@ -2,14 +2,19 @@ name: Production Kitchen T+1 auto-order
 
 on:
   schedule:
-    # 07:00 in Madrid (CEST, UTC+2) = 05:00 UTC.
-    # NOTE: Spain is UTC+1 (CET) in winter — during that period this will
-    # actually fire at 06:00 Madrid time, not 07:00. GitHub Actions cron
-    # cannot shift automatically for daylight saving. If exact 07:00 local
-    # time matters year-round, this needs two cron lines (one for summer,
-    # one for winter) or a small time check inside the script that exits
-    # early outside the intended local hour.
-    - cron: '0 5 * * *'
+    # Primary morning run: 04:47 UTC = 06:47 Madrid (CEST, summer) / 05:47 (CET, winter).
+    # Backup run ~30 min later: 05:17 UTC = 07:17 CEST / 06:17 CET, in case the primary
+    # is delayed or skipped by GitHub Actions (this has happened — see 2026-08-27/28).
+    # Deliberately NOT on a round hour/half-hour: GitHub's own docs note that scheduled
+    # workflows are most likely to be delayed right at the top of the hour, when many
+    # repos' cron jobs fire at once.
+    #
+    # NOTE ON DST: these UTC times are tuned for CEST (summer). In winter (CET, UTC+1)
+    # both runs will land about an hour earlier in Madrid local time. If exact local
+    # time matters year-round, this needs seasonal cron lines or a check inside the
+    # script — not implemented yet.
+    - cron: '47 4 * * *'
+    - cron: '17 5 * * *'
   workflow_dispatch:
     inputs:
       send_email:
@@ -39,4 +44,8 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           SEND_EMAIL_OVERRIDE: ${{ github.event.inputs.send_email }}
+          # Built-in token, used only to read this workflow's own run history (to detect
+          # whether the primary run already succeeded before the backup run fires).
+          # No extra secret setup needed — GitHub provides this automatically.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm start
