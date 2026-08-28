@@ -83,6 +83,32 @@ function madridHour(date) {
   );
 }
 
+// ---------- Missed-window alert ----------
+// The workflow ticks every 15 min, 05:00-05:30 UTC. If the readiness check below never
+// passes all morning (the Cowork imports or the deduction job never caught up), every
+// tick was silently exiting with just a console log — nobody would know the day's order
+// was skipped until someone noticed the missing email. This sends ONE alert email
+// instead, but only from the LAST tick of the window, so it fires at most once per day
+// and only once we're sure no earlier tick is still going to succeed.
+const LAST_TICK_UTC_HOUR = 5;
+const LAST_TICK_UTC_MINUTE = 30;
+
+function isLastTickOfWindow(date) {
+  return date.getUTCHours() === LAST_TICK_UTC_HOUR && date.getUTCMinutes() >= LAST_TICK_UTC_MINUTE;
+}
+
+async function sendResendEmail({ subject, text }) {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: EMAIL_FROM, to: [EMAIL_TO], subject, text }),
+  });
+  const result = await res.json();
+  if (result.error) throw new Error(`Resend send failed: ${result.error.message || JSON.stringify(result.error)}`);
+  console.log('Email sent:', result.id || result);
+  return result;
+}
+
 // The workflow now ticks every 15 minutes through the morning window (see the .yml),
 // so this script runs many times per day. Two things stop that from causing spam:
 // (1) the readiness check below (skips entirely until the deduction job has caught up),
@@ -219,11 +245,28 @@ async function main() {
     const todaysBatch = dailySales.filter(s => eligible(s) && (s.fields['Date'] || '').slice(0, 10) === mostRecentDate);
     const deductionCaughtUp = mostRecentDate && todaysBatch.length > 0 && todaysBatch.every(s => s.fields['Stock Deducted']);
     if (!deductionCaughtUp) {
-      console.log(
-        `Daily Stock Consumption Deduction hasn't caught up yet (most recent Daily Sales date: ${mostRecentDate || 'none'}, ` +
-        `${todaysBatch.filter(s => !s.fields['Stock Deducted']).length}/${todaysBatch.length} of that day's records still un-deducted). ` +
-        `Skipping this tick — a later scheduled run will pick it up once the data is ready.`
-      );
+      const reason = `most recent Daily Sales date: ${mostRecentDate || 'none'}, ` +
+        `${todaysBatch.filter(s => !s.fields['Stock Deducted']).length}/${todaysBatch.length} of that day's records still un-deducted`;
+      if (isLastTickOfWindow(today)) {
+        console.log(`Last tick of the morning window and still not ready (${reason}). Sending a missed-window alert.`);
+        try {
+          await sendResendEmail({
+            subject: `⚠️ Production Kitchen order MISSED for ${targetDateStr}`,
+            text:
+              `No Production Kitchen order was generated or sent today — the morning window (05:00–05:30 UTC / 07:00–07:30 Madrid) ` +
+              `ended without the Daily Stock Consumption Deduction catching up on today's Daily Sales data.\n\n` +
+              `Details: ${reason}.\n\n` +
+              `Likely cause: the Cowork POS import task(s) (04:30 / 06:00) didn't complete, or the Deduction ` +
+              `workflow failed. Check the Cowork Scheduled tasks page and the Airtable Daily Sales table, then ` +
+              `run "Production Kitchen T+1 auto-order" manually (Run workflow, with send_email checked) once ` +
+              `the data looks right.`,
+          });
+        } catch (e) {
+          console.log(`Missed-window alert email also failed to send: ${e.message}`);
+        }
+      } else {
+        console.log(`Daily Stock Consumption Deduction hasn't caught up yet (${reason}). Skipping this tick — a later scheduled run will pick it up once the data is ready.`);
+      }
       return;
     }
   }
