@@ -2,19 +2,19 @@ name: Production Kitchen T+1 auto-order
 
 on:
   schedule:
-    # Runs every 15 min, 04:00-07:59 UTC, every day.
-    # This used to be a single fixed UTC time, tuned to land at ~07:00 Madrid — but that
-    # breaks across the DST changeover (CEST/CET are 1h apart) and GitHub Actions itself
-    # can delay a single scheduled tick by hours under load (seen on 2026-08-27/28).
+    # Runs every 15 min, 05:00-05:30 UTC = 07:00-07:30 Madrid (CEST, summer) — i.e. the
+    # 07:00-07:30 window, starting right after the Daily Stock Consumption Deduction
+    # workflow's own 06:00-06:59 window closes (no overlapping/simultaneous ticks).
+    # NOTE: tuned for CEST. Revisit in October when clocks go back to CET — until then
+    # this is fine.
     #
-    # Instead: run often, and let the script itself decide whether it's actually ready to
-    # act — it checks that the Daily Stock Consumption Deduction job has already caught up
-    # on today's Daily Sales data (see the script for details) before computing an order,
-    # and checks GitHub's own run history to avoid sending more than one email per day.
-    # Net effect: the real order+email happens on the first tick where the upstream data
-    # is ready, whatever the season or whatever delay Actions itself introduces — no more
-    # guessing fixed offsets between the import → deduction → order chain.
-    - cron: '*/15 4-7 * * *'
+    # The script itself still decides whether it's actually ready to act — it checks
+    # that the Daily Stock Consumption Deduction job has already caught up on today's
+    # Daily Sales data before computing an order, and uses the Orders table (not GitHub
+    # run history) to avoid sending more than one email per day. If the last tick
+    # (05:30 UTC / 07:30 Madrid) still isn't ready, it sends a "missed" alert instead
+    # of staying silent.
+    - cron: '0,15,30 5 * * *'
   workflow_dispatch:
     inputs:
       send_email:
