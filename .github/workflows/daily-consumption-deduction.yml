@@ -2,12 +2,14 @@ name: Daily Stock Consumption Deduction
 
 on:
   schedule:
-    # 06:30 Madrid (CEST, UTC+2) = 04:30 UTC, every day. Runs after the Cowork
-    # task (06:00) that imports the previous day's Daily Sales from the POS
-    # emails, so the sales data is already there by the time this runs.
-    # NOTE: same DST caveat as the other scheduled workflows - in winter
-    # (CET, UTC+1) this will actually fire at 05:30 Madrid time, not 06:30.
-    - cron: '30 4 * * *'
+    # Runs every 15 min, 04:00-06:29 UTC, every day.
+    # This used to be a single fixed UTC time tuned for ~06:30 Madrid — but that drifts
+    # by an hour across the DST changeover (CEST/CET), and could in principle run before
+    # the ~06:00 Cowork import if Actions itself delays a single tick.
+    # Safe to run this often: the script is idempotent (only ever processes Daily Sales
+    # records not yet marked "Stock Deducted"), so early ticks before the day's sales
+    # have been imported are simply no-ops.
+    - cron: '*/15 4-6 * * *'
   workflow_dispatch: {}
 
 jobs:
