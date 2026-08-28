@@ -83,35 +83,13 @@ function madridHour(date) {
   );
 }
 
-// The workflow now has TWO schedule triggers: a primary morning run, and a backup
-// ~30 minutes later in case GitHub Actions delays or skips the primary (this has
-// happened — see 2026-08-27/28). Both are genuine "schedule" events, so we can't tell
-// them apart by event name. Instead, before sending, check the GitHub Actions run
-// history: if a scheduled run of this same workflow already completed successfully
-// earlier today, this is the backup catching up after a real send — skip re-sending.
-// If the check itself fails for any reason, fail OPEN (send anyway): a rare duplicate
-// email is a much smaller problem than silently missing the day's order.
-async function anotherScheduledRunAlreadySucceededToday(runDate) {
-  if (GITHUB_EVENT_NAME !== 'schedule') return false;
-  const token = process.env.GH_TOKEN;
-  const repo = process.env.GITHUB_REPOSITORY;
-  const currentRunId = process.env.GITHUB_RUN_ID;
-  if (!token || !repo) return false;
-  try {
-    const res = await fetch(
-      `https://api.github.com/repos/${repo}/actions/workflows/production-kitchen-order.yml/runs?event=schedule&status=success&per_page=10`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
-    );
-    const data = await res.json();
-    const todayStr = isoDate(runDate);
-    return (data.workflow_runs || []).some(
-      r => String(r.id) !== String(currentRunId) && (r.created_at || '').slice(0, 10) === todayStr
-    );
-  } catch (e) {
-    console.log(`Could not check prior scheduled runs (${e.message}) — sending anyway to be safe.`);
-    return false;
-  }
-}
+// The workflow now ticks every 15 minutes through the morning window (see the .yml),
+// so this script runs many times per day. Two things stop that from causing spam:
+// (1) the readiness check below (skips entirely until the deduction job has caught up),
+// (2) the Orders-based dedup check right before the email send (skips once a real send
+// already happened today). Both are based on actual Airtable state, not on run history —
+// every GitHub Actions tick "succeeds" whether or not it did anything, so run history
+// alone can't distinguish "not ready yet" from "already sent".
 
 const BUFFER_MULTIPLIER = 1.5;
 
@@ -220,6 +198,35 @@ async function main() {
     airtableGetAll('Inventory Transactions'),
     airtableGetAll('Locations'),
   ]);
+
+  // ---------- Wait for the daily consumption deduction to have caught up ----------
+  // This script's "current stock" figure depends on the Daily Stock Consumption
+  // Deduction job having already turned yesterday's Daily Sales into "Consumption"
+  // Inventory Transactions. Rather than assuming a fixed time gap (which broke over
+  // the DST change, and whenever Actions itself is delayed), check the actual data:
+  // is the most recent day's eligible Daily Sales batch fully marked "Stock Deducted"?
+  // If not, this run is too early — bail out quietly and let a later cron tick
+  // (the workflow now runs every 15 min in the morning window) pick it up once ready.
+  // Manual runs skip this check so testing/backfilling is never blocked by it.
+  if (GITHUB_EVENT_NAME === 'schedule') {
+    const eligible = s => (s.fields['Menu Item'] || []).length && (s.fields['Location'] || []).length;
+    const mostRecentDate = dailySales
+      .filter(eligible)
+      .reduce((max, s) => {
+        const d = (s.fields['Date'] || '').slice(0, 10);
+        return d > max ? d : max;
+      }, '');
+    const todaysBatch = dailySales.filter(s => eligible(s) && (s.fields['Date'] || '').slice(0, 10) === mostRecentDate);
+    const deductionCaughtUp = mostRecentDate && todaysBatch.length > 0 && todaysBatch.every(s => s.fields['Stock Deducted']);
+    if (!deductionCaughtUp) {
+      console.log(
+        `Daily Stock Consumption Deduction hasn't caught up yet (most recent Daily Sales date: ${mostRecentDate || 'none'}, ` +
+        `${todaysBatch.filter(s => !s.fields['Stock Deducted']).length}/${todaysBatch.length} of that day's records still un-deducted). ` +
+        `Skipping this tick — a later scheduled run will pick it up once the data is ready.`
+      );
+      return;
+    }
+  }
 
   // Only products supplied by the Production Kitchen matter for this order.
   const pkProducts = products.filter(p => (p.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID));
@@ -532,8 +539,17 @@ async function main() {
     return;
   }
 
-  if (await anotherScheduledRunAlreadySucceededToday(today)) {
-    console.log('A scheduled run already completed successfully earlier today — this is the backup slot catching up after a real send, skipping to avoid a duplicate email.');
+  // With the workflow now ticking every 15 min through the morning window, this same
+  // check needs to also stop a SECOND tick (after the real one already sent) from
+  // re-sending. Base this on the Orders idempotency check above, not on GitHub's own
+  // run history — every tick "succeeds" (exits 0) whether or not it actually sent
+  // anything, so run history can't tell "already sent" apart from "not ready yet".
+  // Limitation: on a day where every restaurant genuinely needs zero items, there's no
+  // Order record to check against, so that one case isn't de-duplicated — acceptable,
+  // since a repeated "nothing to order" email is a minor annoyance, not a data problem.
+  const restaurantsNeedingOrder = Object.entries(results).filter(([, q]) => Object.keys(q).length > 0).map(([r]) => r);
+  if (restaurantsNeedingOrder.length > 0 && restaurantsNeedingOrder.every(r => alreadyOrdered.has(r))) {
+    console.log('All restaurants that need an order already have one for today — this looks like a later tick catching up after a real send already went out. Skipping to avoid a duplicate email.');
     return;
   }
 
