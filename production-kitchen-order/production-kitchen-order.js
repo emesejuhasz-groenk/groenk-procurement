@@ -83,6 +83,36 @@ function madridHour(date) {
   );
 }
 
+// The workflow now has TWO schedule triggers: a primary morning run, and a backup
+// ~30 minutes later in case GitHub Actions delays or skips the primary (this has
+// happened — see 2026-08-27/28). Both are genuine "schedule" events, so we can't tell
+// them apart by event name. Instead, before sending, check the GitHub Actions run
+// history: if a scheduled run of this same workflow already completed successfully
+// earlier today, this is the backup catching up after a real send — skip re-sending.
+// If the check itself fails for any reason, fail OPEN (send anyway): a rare duplicate
+// email is a much smaller problem than silently missing the day's order.
+async function anotherScheduledRunAlreadySucceededToday(runDate) {
+  if (GITHUB_EVENT_NAME !== 'schedule') return false;
+  const token = process.env.GH_TOKEN;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const currentRunId = process.env.GITHUB_RUN_ID;
+  if (!token || !repo) return false;
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/actions/workflows/production-kitchen-order.yml/runs?event=schedule&status=success&per_page=10`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+    );
+    const data = await res.json();
+    const todayStr = isoDate(runDate);
+    return (data.workflow_runs || []).some(
+      r => String(r.id) !== String(currentRunId) && (r.created_at || '').slice(0, 10) === todayStr
+    );
+  } catch (e) {
+    console.log(`Could not check prior scheduled runs (${e.message}) — sending anyway to be safe.`);
+    return false;
+  }
+}
+
 const BUFFER_MULTIPLIER = 1.5;
 
 // TEMPORARY (a few weeks, starting 2026-08-27): order for TODAY (T) instead of
@@ -499,6 +529,11 @@ async function main() {
       `Email only sends automatically on a scheduled run, or on a manual run with the ` +
       `send_email input set to true. Airtable writes above (if any) still happened normally.`
     );
+    return;
+  }
+
+  if (await anotherScheduledRunAlreadySucceededToday(today)) {
+    console.log('A scheduled run already completed successfully earlier today — this is the backup slot catching up after a real send, skipping to avoid a duplicate email.');
     return;
   }
 
