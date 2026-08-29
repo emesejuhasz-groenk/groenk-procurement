@@ -1,6 +1,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -193,6 +194,33 @@ const BULK_LITER_PRODUCTS = {
 };
 const KEG_PRODUCTS = { 'recg4kyyl1P4ionxe': 30 };
 
+// ---------- Shared ledger helpers ----------
+// A physical count (Manual Adjustment with a "Manual count" note) resets the ledger:
+// its stored delta was calibrated against whatever existed in Airtable at insertion
+// time, and anything else must only apply on/after the count's own date, or a
+// backfilled row (e.g. a delayed consumption deduction) gets double-counted. See
+// production-kitchen-order.js / daily-consumption-deduction.js for the full
+// reasoning (fixed 2026-08-29) — this mirrors the same logic for the app's own
+// stock displays and order suggestions, so all three stay consistent.
+const LEDGER_EFFECT = (type, qty) => (type === 'Waste' || type === 'Consumption') ? -Math.abs(qty) : qty;
+const IS_MANUAL_COUNT = t => t.fields['Type'] === 'Manual Adjustment' && String(t.fields['Notes'] || '').toLowerCase().includes('manual count');
+
+function computeCurrentStock(allTxns, productId, locationId) {
+  const relevant = allTxns.filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId));
+  let lastCount = null;
+  for (const t of relevant) {
+    if (IS_MANUAL_COUNT(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
+  }
+  if (!lastCount) {
+    return relevant.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0);
+  }
+  const baseline = relevant.filter(t => t.createdTime < lastCount.createdTime)
+    .reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0)
+    + LEDGER_EFFECT(lastCount.fields['Type'], Number(lastCount.fields['Quantity']) || 0);
+  const after = relevant.filter(t => t.createdTime > lastCount.createdTime && (t.fields['Date'] || '') >= (lastCount.fields['Date'] || ''));
+  return after.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
+}
+
 function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) {
   const f = String(fromUnit || '').toLowerCase().trim();
   const t = String(toUnit || '').toLowerCase().trim();
@@ -231,7 +259,8 @@ function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) 
   return startedAsWeightOrVolume ? null : qty;
 }
 
-const ORDER_SUGGESTION_BUFFER = 1.2;
+// Matches the buffer used in production-kitchen-order.js (confirmed 2026-08-29).
+const ORDER_SUGGESTION_BUFFER = 1.5;
 
 // Maps an Employees record (Role + Department) to this app's permission level.
 function mapEmployeeToAppRole(fields) {
@@ -475,25 +504,29 @@ function NewOrderScreen({ user, api }) {
   const isProductionKitchen = supplierId === PRODUCTION_KITCHEN_SUPPLIER_ID;
   const userLocationId = LOCATION_IDS[user.restaurant];
 
+  // ---------- Current stock (physical-count-aware) ----------
+  // Fixed 2026-08-29: a plain chronological sum double-counts consumption whenever a
+  // physical count gets entered LATE and a day's consumption then gets backfilled
+  // afterward for a date before that count — the count already reflects that
+  // consumption in the real world, so re-applying it subtracts twice. See the same
+  // fix in production-kitchen-order.js / daily-consumption-deduction.js for the full
+  // reasoning. The baseline uses INSERTION order (createdTime) to reconstruct what
+  // the count's delta was calibrated against; anything applied on top must be dated
+  // on/after the count's own date.
   function currentStock(productId) {
-    return invTxns
-      .filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(userLocationId))
-      .reduce((sum, t) => {
-        const qty = Number(t.fields['Quantity']) || 0;
-        return (t.fields['Type'] === 'Waste' || t.fields['Type'] === 'Consumption') ? sum - Math.abs(qty) : sum + qty;
-      }, 0);
+    return computeCurrentStock(invTxns, productId, userLocationId);
   }
 
-  // Computes a suggested order quantity per product for this supplier, using the same
-  // logic as the Production Kitchen T+1 script: last-2-days average consumption (via
-  // Recipes BOM) x 1.2 buffer, minus current stock, always rounded up.
+  // Computes a suggested order quantity per product for this supplier. Matches
+  // production-kitchen-order.js (confirmed 2026-08-29): required stock today =
+  // YESTERDAY's actual units sold (single most recent day, no averaging) x 1.5,
+  // minus current stock, always rounded up.
   function computeSuggestions() {
     if (isProductionKitchen || !userLocationId) return { result: {}, unreliableCount: 0 };
     const unreliableProducts = new Set();
     const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(userLocationId));
-    const recentDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse().slice(0, 2);
+    const recentDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse().slice(0, 1);
     const recentSales = salesHere.filter(s => recentDates.includes(s.fields['Date']));
-    const denom = recentDates.length || 1;
 
     const salesByMenuItem = {};
     for (const s of recentSales) {
@@ -501,7 +534,7 @@ function NewOrderScreen({ user, api }) {
       for (const miId of (s.fields['Menu Item'] || [])) (salesByMenuItem[miId] = salesByMenuItem[miId] || []).push(units);
     }
     const avgUnitsSold = {};
-    for (const [miId, arr] of Object.entries(salesByMenuItem)) avgUnitsSold[miId] = arr.reduce((a,b)=>a+b, 0) / denom;
+    for (const [miId, arr] of Object.entries(salesByMenuItem)) avgUnitsSold[miId] = arr.reduce((a,b)=>a+b, 0);
 
     const supplierProductIds = new Set(filteredProducts.map(p => p.id));
     const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
@@ -602,7 +635,7 @@ function NewOrderScreen({ user, api }) {
               </div>
               <div className="qty-controls">
                 <button className="qty-btn" onClick={() => bump(p.id, -1)}><i className="ti ti-minus" style={{ fontSize: 14 }}></i></button>
-                <input type="number" min="0" inputMode="numeric" placeholder="0" value={quantities[p.id] || ''} onChange={e => setQuantities(q => ({ ...q, [p.id]: e.target.value }))} className="qty-input" />
+                <input type="text" inputMode="numeric" placeholder="0" value={quantities[p.id] || ''} onChange={e => setQuantities(q => ({ ...q, [p.id]: e.target.value.replace(',', '.') }))} className="qty-input" />
                 <button className="qty-btn" onClick={() => bump(p.id, 1)}><i className="ti ti-plus" style={{ fontSize: 14 }}></i></button>
               </div>
             </div>
@@ -744,9 +777,9 @@ function PendingOrdersScreen({ user, api }) {
                   return (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                       <input
-                        type="number" inputMode="decimal" step="0.01" min="0"
+                        type="text" inputMode="decimal"
                         value={currentVal}
-                        onChange={e => setEdits(ed => ({ ...ed, [it.id]: e.target.value }))}
+                        onChange={e => setEdits(ed => ({ ...ed, [it.id]: e.target.value.replace(',', '.') }))}
                         style={{ width: 70, fontSize: 13, padding: '3px 6px', minHeight: 28 }}
                       />
                       <span>× {prod?.fields['Name'] || '...'}</span>
@@ -756,9 +789,9 @@ function PendingOrdersScreen({ user, api }) {
               {(newLines[o.id] || []).map((line, idx) => (
                 <div key={'new'+idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                   <input
-                    type="number" inputMode="decimal" step="0.01" min="0" placeholder="qty"
+                    type="text" inputMode="decimal" placeholder="qty"
                     value={line.qty}
-                    onChange={e => updateNewLine(o.id, idx, 'qty', e.target.value)}
+                    onChange={e => updateNewLine(o.id, idx, 'qty', e.target.value.replace(',', '.'))}
                     style={{ width: 70, fontSize: 13, padding: '3px 6px', minHeight: 28 }}
                   />
                   <select
@@ -913,11 +946,10 @@ function DeliveryScreen({ user, api }) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
                     <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Received qty:</span>
                     <input
-                      type="number"
+                      type="text"
                       inputMode="decimal"
-                      step="0.01"
                       value={currentReceived}
-                      onChange={e => setReceivedQty(q => ({ ...q, [item.id]: e.target.value }))}
+                      onChange={e => setReceivedQty(q => ({ ...q, [item.id]: e.target.value.replace(',', '.') }))}
                       onClick={e => e.stopPropagation()}
                       style={{ width: 80, fontSize: 14, padding: '4px 8px', minHeight: 32, border: differs ? '1px solid var(--text-warning, #c77700)' : undefined }}
                     />
@@ -1021,11 +1053,10 @@ function InvoiceScreen({ api }) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                     <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Received qty:</span>
                     <input
-                      type="number"
+                      type="text"
                       inputMode="decimal"
-                      step="0.01"
                       value={currentReceived}
-                      onChange={e => setReceivedQty(q => ({ ...q, [item.id]: e.target.value }))}
+                      onChange={e => setReceivedQty(q => ({ ...q, [item.id]: e.target.value.replace(',', '.') }))}
                       style={{ width: 80, fontSize: 14, padding: '4px 8px', minHeight: 32, border: differs ? '1px solid var(--text-warning, #c77700)' : undefined }}
                     />
                     {differs && <span style={{ fontSize: 12, color: 'var(--text-warning, #c77700)' }}>⚠ differs from ordered</span>}
@@ -1188,14 +1219,7 @@ function InventoryScreen({ user, api }) {
 
   const locationId = LOCATION_IDS[location];
   function currentStock(productId) {
-    return txns
-      .filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId))
-      .reduce((sum, t) => {
-        const qty = Number(t.fields['Quantity']) || 0;
-        const type = t.fields['Type'];
-        if (type === 'Waste' || type === 'Consumption') return sum - Math.abs(qty);
-        return sum + qty; // Opening Count, Delivery Received, Manual Adjustment (signed)
-      }, 0);
+    return computeCurrentStock(txns, productId, locationId);
   }
 
   async function saveCount(productId) {
@@ -1258,7 +1282,7 @@ function InventoryScreen({ user, api }) {
                   const editing = counts[p.id] !== undefined;
                   const override = INVENTORY_COUNT_OVERRIDE[p.id];
                   const displayUnit = override ? override.countUnit : p.fields['Unit'];
-                  const displayStock = override ? Math.round(stock * override.countsPerStockUnit * 100) / 100 : stock;
+                  const displayStock = Math.round((override ? stock * override.countsPerStockUnit : stock) * 100) / 100;
                   return (
                     <div key={p.id} className="product-row">
                       <div>
@@ -1268,8 +1292,8 @@ function InventoryScreen({ user, api }) {
                       <div className="qty-controls">
                         {editing ? (
                           <>
-                            <input type="number" inputMode="decimal" step="0.01" placeholder="count" value={counts[p.id]}
-                              onChange={e => setCounts(c => ({ ...c, [p.id]: e.target.value }))}
+                            <input type="text" inputMode="decimal" placeholder="count" value={counts[p.id]}
+                              onChange={e => setCounts(c => ({ ...c, [p.id]: e.target.value.replace(',', '.') }))}
                               className="qty-input" style={{ width: 64 }} />
                             <button className="qty-btn" onClick={() => saveCount(p.id)} disabled={saving === p.id}>
                               {saving === p.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <i className="ti ti-check" style={{ fontSize: 14 }}></i>}
@@ -1356,7 +1380,7 @@ function WasteScreen({ user, api }) {
           })}
         </select>
         <div className="section-label">Quantity wasted</div>
-        <input type="number" inputMode="decimal" step="0.01" min="0" placeholder="0" value={qty} onChange={e => setQty(e.target.value)} style={{ marginBottom: 12 }} />
+        <input type="text" inputMode="decimal" placeholder="0" value={qty} onChange={e => setQty(e.target.value.replace(',', '.'))} style={{ marginBottom: 12 }} />
         <div className="section-label">Reason</div>
         <select value={reason} onChange={e => setReason(e.target.value)} style={{ marginBottom: 12 }}>
           {WASTE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
