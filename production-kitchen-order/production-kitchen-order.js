@@ -378,13 +378,45 @@ async function main() {
     }
   }
 
+  // ---------- Current stock (physical-count-aware) ----------
+  // Fixed 2026-08-29: a plain chronological sum of every ledger row double-counts
+  // consumption whenever a physical count gets entered LATE (its own day's
+  // consumption not yet deducted at count time, then backfilled afterward). The
+  // physical count already reflects that consumption in the real world — so
+  // re-applying a backfilled row dated BEFORE the count subtracts it twice.
+  //
+  // The fix needs two different orderings for two different questions:
+  // 1) What was the count's delta CALIBRATED AGAINST? Whatever existed in Airtable
+  //    at the moment it was entered — i.e. sorted by createdTime (insertion order),
+  //    not by the ledger rows' own Date. history-by-insertion-order + the count's
+  //    own delta = the actual physical count value that was typed in.
+  // 2) Which LATER rows should still apply on top? Only ones whose real-world Date
+  //    is on/after the count's Date — a row inserted afterward (backfilled) but
+  //    dated BEFORE the count already happened before the shelf was counted, so is
+  //    already baked into that physical number and must be excluded, not re-summed.
+  const ledgerEffect = (type, qty) => (type === 'Waste' || type === 'Consumption') ? -Math.abs(qty) : qty;
+  const isManualCount = t => t.fields['Type'] === 'Manual Adjustment' && String(t.fields['Notes'] || '').toLowerCase().includes('manual count');
+
   function currentStock(productId, locationId) {
-    return invTxns
-      .filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId))
-      .reduce((sum, t) => {
-        const qty = Number(t.fields['Quantity']) || 0;
-        return (t.fields['Type'] === 'Waste' || t.fields['Type'] === 'Consumption') ? sum - Math.abs(qty) : sum + qty;
-      }, 0);
+    const txns = invTxns.filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId));
+
+    let lastCount = null;
+    for (const t of txns) {
+      if (isManualCount(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
+    }
+    if (!lastCount) {
+      return txns.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0);
+    }
+
+    const baseline = txns
+      .filter(t => t.createdTime < lastCount.createdTime)
+      .reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0)
+      + ledgerEffect(lastCount.fields['Type'], Number(lastCount.fields['Quantity']) || 0);
+
+    const after = txns.filter(t =>
+      t.createdTime > lastCount.createdTime && (t.fields['Date'] || '') >= (lastCount.fields['Date'] || '')
+    );
+    return after.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
   }
 
   // results[restaurantName][productId] = order quantity
