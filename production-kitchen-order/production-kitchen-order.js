@@ -5,10 +5,10 @@
  * (Deià, Fornalutx, Sóller Pizza), computes a suggested order quantity for
  * every product supplied by "Groenk Production Kitchen":
  *
- *   avg = average daily consumption over the LAST 2 CALENDAR DAYS with Daily
- *         Sales data (no weekday-matching — demand is fairly stable day to
- *         day in Mallorca, per Emese) × Recipes(BOM)
- *   par = avg * days to cover * 1.5            (buffer, +50%)
+ *   yesterday_sales = units sold on the single most recent calendar day with
+ *         Daily Sales data (confirmed 2026-08-29: NOT an average of several
+ *         days — just yesterday's actual number) × Recipes(BOM)
+ *   par = yesterday_sales * days to cover * 1.5      (required stock, +50% buffer)
  *   order qty = max(0, ceil(par - current stock))   (always rounds UP)
  *   current stock = Inventory Transactions ledger sum (Opening Count +
  *                   Delivery Received + Manual Adjustment - Waste -
@@ -25,15 +25,9 @@
  * a double-booking incident. Revert TARGET_DAY_OFFSET to 1 once things
  * have settled — nothing else in this file needs to change to switch back.
  *
- * Whichever mode is active, the Production Kitchen delivers Tuesday–Sunday
- * (NOT Monday), checked against the TARGET date's weekday (so this adapts
- * automatically whether TARGET_DAY_OFFSET is 0 or 1):
- *   - if the target date is a Monday, there's no Monday delivery, so the
- *     script exits without doing anything for that restaurant/day — the
- *     next day's run will compute Tuesday's order instead
- *   - if the target date is a Sunday, that delivery has to cover BOTH
- *     Sunday and Monday (2 days) since nothing arrives again until Tuesday
- *   - every other target weekday covers exactly 1 day
+ * Production Kitchen now delivers every day of the week (confirmed
+ * 2026-08-29 — this replaces the earlier Tuesday–Sunday / no-Monday rule).
+ * daysToCover is therefore always 1.
  *
  * Output:
  *   1. Creates an Order + Order Items record per restaurant in Airtable
@@ -122,9 +116,8 @@ const BUFFER_MULTIPLIER = 1.5;
 // TEMPORARY (a few weeks, starting 2026-08-27): order for TODAY (T) instead of
 // tomorrow (T+1), while stock / auto-order / receiving get back in sync after the
 // double-booking incident. Revert to 1 once things have settled.
-// NOTE: this shifts EVERY downstream date calculation (target date, weekday checks,
-// Monday-skip, Saturday double-coverage) by the same amount — no other code changes
-// needed elsewhere in this file.
+// NOTE: this shifts EVERY downstream date calculation (target date, weekday) by the
+// same amount — no other code changes needed elsewhere in this file.
 const TARGET_DAY_OFFSET = 0;
 const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
 
@@ -208,13 +201,12 @@ async function main() {
   const targetWeekday = targetDate.getDay(); // 0=Sun..6=Sat
   console.log(`Run date: ${isoDate(today)} — target (T+${TARGET_DAY_OFFSET}) date: ${targetDateStr} (weekday ${targetWeekday})`);
 
-  if (targetWeekday === 1) {
-    console.log('Target date is a Monday — Production Kitchen does not deliver on Mondays. Nothing to do; Tuesday\'s order will be computed by tomorrow\'s (Monday) run instead.');
-    return;
-  }
-  // Saturday's run (target = Sunday) has to cover Sunday AND Monday, since there's no
-  // Monday delivery to top up again before Tuesday.
-  const daysToCover = targetWeekday === 0 ? 2 : 1;
+  // Production Kitchen now delivers every day of the week (confirmed 2026-08-29 — no
+  // more Monday exception, no more Sunday-covers-2-days special case). daysToCover is
+  // kept as a variable (rather than inlining "1" everywhere) so it's a single, obvious
+  // place to reintroduce a multi-day rule later if the delivery schedule ever changes
+  // again.
+  const daysToCover = 1;
   console.log(`Days to cover: ${daysToCover}`);
 
   const [products, recipes, dailySales, invTxns, locations] = await Promise.all([
@@ -398,18 +390,23 @@ async function main() {
   // results[restaurantName][productId] = order quantity
   const results = {};
   for (const [restaurantName, locationId] of Object.entries(RESTAURANTS)) {
-    // Use the last 2 calendar days that have Daily Sales data for this location — no
-    // weekday-matching, since demand is fairly stable day to day here (per Emese).
+    // Use YESTERDAY'S actual sales only — the single most recent calendar day that has
+    // Daily Sales data for this location. Confirmed 2026-08-29 (Emese): this is NOT an
+    // average of several days anymore. Rule: required stock for today = yesterday's
+    // units sold × 1.5, minus whatever is still actually on the shelf right now.
+    // Example: sold 40 yesterday, had 60 in stock yesterday morning → 20 left tonight.
+    // Required stock today = 40 × 1.5 = 60. Order = 60 − 20 = 40.
     const salesForLocation = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
     const recentDates = [...new Set(salesForLocation.map(s => s.fields['Date']).filter(Boolean))]
       .sort()
       .reverse()
-      .slice(0, 2);
+      .slice(0, 1);
     const recentSales = salesForLocation.filter(s => recentDates.includes(s.fields['Date']));
-    console.log(`${restaurantName}: using last-2-days average from ${recentDates.join(', ') || '(no data)'}`);
+    console.log(`${restaurantName}: using yesterday's sales from ${recentDates[0] || '(no data)'}`);
 
-    // avgUnitsSold[menuItemId] = total units sold across those dates / number of dates
-    // (fixed denominator, so a day with zero sales for an item still pulls the average down)
+    // avgUnitsSold[menuItemId] = units sold on that single most recent day (no averaging).
+    // Kept the name "avgUnitsSold" / "avg" below for minimal diff — it's really just
+    // "yesterday's units", not an average, as of the 2026-08-29 formula change.
     const salesByMenuItem = {};
     for (const s of recentSales) {
       const miIds = s.fields['Menu Item'] || [];
@@ -419,9 +416,8 @@ async function main() {
       }
     }
     const avgUnitsSold = {};
-    const denom = recentDates.length || 1;
     for (const [miId, arr] of Object.entries(salesByMenuItem)) {
-      avgUnitsSold[miId] = arr.reduce((a, b) => a + b, 0) / denom;
+      avgUnitsSold[miId] = arr.reduce((a, b) => a + b, 0);
     }
 
     // Aggregate average ingredient consumption per Production-Kitchen product.
@@ -617,7 +613,7 @@ async function main() {
       to: [EMAIL_TO],
       subject: `Production Kitchen Order — ${targetDateStr}`,
       text: (hasAnyOrders
-        ? `Attached: suggested order for ${targetDateStr} (${offsetLabel}${daysToCover === 2 ? ', covering Sun+Mon since there is no Monday delivery' : ''}), by restaurant and total. The sheet always lists every Production Kitchen product; rows with nothing to order are left blank.`
+        ? `Attached: suggested order for ${targetDateStr} (${offsetLabel}), by restaurant and total. The sheet always lists every Production Kitchen product; rows with nothing to order are left blank.`
         : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold. Attached anyway for reference (all rows blank).`) + lateNote,
       // Always attach — the sheet is the full PK product list every day, not just
       // days where something needs ordering.
