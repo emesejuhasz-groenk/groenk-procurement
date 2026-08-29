@@ -13,6 +13,13 @@
  * so a T-bone and a Chuletón sold the same day at the same place add up into a
  * single BBQ-sauce consumption line, not two.
  *
+ * Since 2026-08-29, every Consumption row this script writes also gets the
+ * resulting running stock balance stamped into "Stock Status After Transaction",
+ * so the current stock per product/location is readable directly in Airtable
+ * without manually summing the ledger. NOTE: this only covers rows THIS script
+ * creates — Manual Adjustment / Delivery Received / Waste rows created by the web
+ * app are a separate piece of work, not yet done.
+ *
  * This makes the "in stock" figure track actual sales in near-real-time, instead
  * of only being corrected at the weekly physical count. The Friday inventory
  * count remains useful as a periodic correction for human error / measurement
@@ -142,11 +149,20 @@ function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) 
 
 function isoDate(d) { return d.toISOString().slice(0, 10); }
 
+// Running balance = same ledger rule used everywhere else in this codebase (pk order
+// script, the app): Consumption and Waste always REDUCE stock (subtract the absolute
+// value, regardless of how the quantity happens to be signed in Airtable), everything
+// else (Delivery Received, Manual Adjustment, Opening Count) is added as stored.
+function applyToBalance(balance, type, qty) {
+  return (type === 'Waste' || type === 'Consumption') ? balance - Math.abs(qty) : balance + qty;
+}
+
 async function main() {
-  const [dailySales, recipes, products] = await Promise.all([
+  const [dailySales, recipes, products, invTxns] = await Promise.all([
     airtableGetAll('Daily Sales'),
     airtableGetAll('Recipes (BOM)'),
     airtableGetAll('Products'),
+    airtableGetAll('Inventory Transactions'),
   ]);
 
   const toProcess = dailySales.filter(s => !s.fields['Stock Deducted'] && (s.fields['Menu Item'] || []).length && (s.fields['Location'] || []).length);
@@ -199,6 +215,40 @@ async function main() {
       'Location': [a.locationId],
       'Notes': 'Auto-deducted from Daily Sales',
     }));
+
+  // ---------- Running balance ("Stock Status After Transaction") ----------
+  // Starting 2026-08-29: every new transaction this script writes also gets the
+  // resulting running stock balance stamped onto it, so the ledger is readable
+  // directly in Airtable without having to sum the whole history by hand.
+  //
+  // Baseline = current stock (existing ledger sum) per (productId, locationId),
+  // computed from the Inventory Transactions already in Airtable BEFORE this run.
+  // New consumption rows for the same product+location (e.g. a multi-day catch-up
+  // run) are then applied on top of that baseline IN DATE ORDER, since each one's
+  // balance depends on the one before it.
+  const baseline = {}; // `${productId}|${locationId}` -> balance
+  for (const t of invTxns) {
+    const productId = (t.fields['Related Product'] || [])[0];
+    const locationId = (t.fields['Location'] || [])[0];
+    if (!productId || !locationId) continue;
+    const key = `${productId}|${locationId}`;
+    const qty = Number(t.fields['Quantity']) || 0;
+    baseline[key] = applyToBalance(baseline[key] || 0, t.fields['Type'], qty);
+  }
+
+  const byProductLocation = {};
+  for (const rec of consumptionRecords) {
+    const key = `${rec['Related Product'][0]}|${rec['Location'][0]}`;
+    (byProductLocation[key] = byProductLocation[key] || []).push(rec);
+  }
+  for (const [key, recs] of Object.entries(byProductLocation)) {
+    recs.sort((a, b) => (a['Date'] < b['Date'] ? -1 : a['Date'] > b['Date'] ? 1 : 0));
+    let running = baseline[key] || 0;
+    for (const rec of recs) {
+      running = applyToBalance(running, rec['Type'], rec['Quantity']);
+      rec['Stock Status After Transaction'] = String(Math.round(running * 1000) / 1000);
+    }
+  }
 
   console.log(`Writing ${consumptionRecords.length} aggregated Consumption transaction(s).`);
   if (consumptionRecords.length) await airtableCreateMany('Inventory Transactions', consumptionRecords);
