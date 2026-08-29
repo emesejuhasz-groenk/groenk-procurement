@@ -149,14 +149,6 @@ function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) 
 
 function isoDate(d) { return d.toISOString().slice(0, 10); }
 
-// Running balance = same ledger rule used everywhere else in this codebase (pk order
-// script, the app): Consumption and Waste always REDUCE stock (subtract the absolute
-// value, regardless of how the quantity happens to be signed in Airtable), everything
-// else (Delivery Received, Manual Adjustment, Opening Count) is added as stored.
-function applyToBalance(balance, type, qty) {
-  return (type === 'Waste' || type === 'Consumption') ? balance - Math.abs(qty) : balance + qty;
-}
-
 async function main() {
   const [dailySales, recipes, products, invTxns] = await Promise.all([
     airtableGetAll('Daily Sales'),
@@ -221,19 +213,33 @@ async function main() {
   // resulting running stock balance stamped onto it, so the ledger is readable
   // directly in Airtable without having to sum the whole history by hand.
   //
-  // Baseline = current stock (existing ledger sum) per (productId, locationId),
-  // computed from the Inventory Transactions already in Airtable BEFORE this run.
-  // New consumption rows for the same product+location (e.g. a multi-day catch-up
-  // run) are then applied on top of that baseline IN DATE ORDER, since each one's
-  // balance depends on the one before it.
-  const baseline = {}; // `${productId}|${locationId}` -> balance
-  for (const t of invTxns) {
-    const productId = (t.fields['Related Product'] || [])[0];
-    const locationId = (t.fields['Location'] || [])[0];
-    if (!productId || !locationId) continue;
-    const key = `${productId}|${locationId}`;
-    const qty = Number(t.fields['Quantity']) || 0;
-    baseline[key] = applyToBalance(baseline[key] || 0, t.fields['Type'], qty);
+  // Same physical-count-aware logic as the PK order script (see its comments for
+  // the full reasoning): a plain chronological sum double-counts consumption
+  // whenever a physical count is entered LATE and a day's consumption then gets
+  // backfilled afterward for a date before that count — the count already
+  // reflects that consumption in the real world, so re-applying it subtracts
+  // twice. The baseline uses INSERTION order (createdTime) to reconstruct what
+  // the count's delta was calibrated against; anything applied on top must be
+  // dated on/after the count's own date, whether it already existed or is being
+  // created in THIS run.
+  const ledgerEffect = (type, qty) => (type === 'Waste' || type === 'Consumption') ? -Math.abs(qty) : qty;
+  const isManualCount = t => t.fields['Type'] === 'Manual Adjustment' && String(t.fields['Notes'] || '').toLowerCase().includes('manual count');
+
+  function stockBeforeThisRun(productId, locationId) {
+    const txns = invTxns.filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId));
+    let lastCount = null;
+    for (const t of txns) {
+      if (isManualCount(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
+    }
+    if (!lastCount) {
+      return { balance: txns.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0), lastCountDate: null };
+    }
+    const baseline = txns.filter(t => t.createdTime < lastCount.createdTime)
+      .reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0)
+      + ledgerEffect(lastCount.fields['Type'], Number(lastCount.fields['Quantity']) || 0);
+    const after = txns.filter(t => t.createdTime > lastCount.createdTime && (t.fields['Date'] || '') >= (lastCount.fields['Date'] || ''));
+    const balance = after.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
+    return { balance, lastCountDate: lastCount.fields['Date'] || null };
   }
 
   const byProductLocation = {};
@@ -243,9 +249,18 @@ async function main() {
   }
   for (const [key, recs] of Object.entries(byProductLocation)) {
     recs.sort((a, b) => (a['Date'] < b['Date'] ? -1 : a['Date'] > b['Date'] ? 1 : 0));
-    let running = baseline[key] || 0;
+    const [productId, locationId] = key.split('|');
+    const { balance, lastCountDate } = stockBeforeThisRun(productId, locationId);
+    let running = balance;
     for (const rec of recs) {
-      running = applyToBalance(running, rec['Type'], rec['Quantity']);
+      if (lastCountDate && rec['Date'] < lastCountDate) {
+        // Backfilling a date before the most recent physical count — already
+        // implicitly reflected in that count's number, so don't apply it to the
+        // running total (would double-count); just stamp the unaffected balance.
+        rec['Stock Status After Transaction'] = String(Math.round(running * 1000) / 1000);
+        continue;
+      }
+      running = ledgerEffect(rec['Type'], rec['Quantity']) + running;
       rec['Stock Status After Transaction'] = String(Math.round(running * 1000) / 1000);
     }
   }
