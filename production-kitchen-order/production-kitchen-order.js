@@ -583,17 +583,21 @@ async function main() {
   }
 
   // With the workflow now ticking every 15 min through the morning window, this same
-  // check needs to also stop a SECOND tick (after the real one already sent) from
-  // re-sending. Base this on the Orders idempotency check above, not on GitHub's own
-  // run history — every tick "succeeds" (exits 0) whether or not it actually sent
-  // anything, so run history can't tell "already sent" apart from "not ready yet".
-  // Limitation: on a day where every restaurant genuinely needs zero items, there's no
-  // Order record to check against, so that one case isn't de-duplicated — acceptable,
-  // since a repeated "nothing to order" email is a minor annoyance, not a data problem.
-  const restaurantsNeedingOrder = Object.entries(results).filter(([, q]) => Object.keys(q).length > 0).map(([r]) => r);
-  if (restaurantsNeedingOrder.length > 0 && restaurantsNeedingOrder.every(r => alreadyOrdered.has(r))) {
-    console.log('All restaurants that need an order already have one for today — this looks like a later tick catching up after a real send already went out. Skipping to avoid a duplicate email.');
-    return;
+  // check needs to also stop a SECOND scheduled tick (after the real one already sent)
+  // from re-sending. Base this on the Orders idempotency check above.
+  //
+  // IMPORTANT: only apply this to SCHEDULED ticks, never to a manual run with
+  // send_email checked. An explicit manual "actually send" click is a direct human
+  // command for THIS run — it must not be silently swallowed just because an earlier
+  // run (e.g. an unchecked silent test) already created the Airtable Order records
+  // without ever emailing anyone. Conflating "Orders exist" with "email was sent" was
+  // exactly the bug that caused a checked, explicit send to go silent on 2026-08-29.
+  if (GITHUB_EVENT_NAME === 'schedule') {
+    const restaurantsNeedingOrder = Object.entries(results).filter(([, q]) => Object.keys(q).length > 0).map(([r]) => r);
+    if (restaurantsNeedingOrder.length > 0 && restaurantsNeedingOrder.every(r => alreadyOrdered.has(r))) {
+      console.log('All restaurants that need an order already have one for today — this looks like a later scheduled tick catching up after a real send already went out. Skipping to avoid a duplicate email.');
+      return;
+    }
   }
 
   const lateNote = isLateRun
