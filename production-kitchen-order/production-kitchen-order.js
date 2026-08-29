@@ -180,6 +180,33 @@ async function airtableCreateMany(table, fieldsArray) {
   return results;
 }
 
+async function airtableUpdateMany(table, updates) {
+  const results = [];
+  for (let i = 0; i < updates.length; i += 10) {
+    const chunk = updates.slice(i, i + 10);
+    const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(table)}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: chunk }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(`Airtable updateMany(${table}): ${data.error.message}`);
+    results.push(...data.records);
+  }
+  return results;
+}
+
+async function airtableDeleteMany(table, ids) {
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10);
+    const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(table)}`);
+    for (const id of chunk) url.searchParams.append('records[]', id);
+    const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` } });
+    const data = await res.json();
+    if (data.error) throw new Error(`Airtable deleteMany(${table}): ${data.error.message}`);
+  }
+}
+
 // ---------- Date helpers ----------
 
 function isoDate(d) {
@@ -482,43 +509,86 @@ async function main() {
 
   // ---------- Write Orders + Order Items to Airtable (so they appear in Receive Goods) ----------
 
-  // Guard against duplicate runs (e.g. the scheduled cron firing plus a manual
-  // "Run workflow" test on the same day): skip any restaurant that already has an
-  // Order from this supplier for this exact target date, regardless of who/what
-  // created it (Auto or manual), Pending or Delivered.
+  // Keep the Order/Order Items in sync with the freshly computed quantities every
+  // time this script runs — the emailed xlsx and what staff see in "Receive Goods"
+  // must always match (confirmed 2026-08-29, after a stale-order incident where the
+  // email got a formula fix but the Airtable Order Items were left with the old,
+  // wrong numbers because the old code just skipped writing once an Order existed).
+  //
+  // Safety guard: if ANY item on an existing Order is already marked Received (goods
+  // receiving has started/finished for it), don't touch that Order's items at all —
+  // reconciling quantities mid-delivery could corrupt an in-progress goods receipt.
+  // Log it clearly so a genuine same-day recompute after receiving starts is visible
+  // rather than silently skipped.
   const existingOrders = await airtableGetAll('Orders');
-  const alreadyOrdered = new Set(
-    existingOrders
-      .filter(o => {
-        const supplierIds = o.fields['Supplier'] || [];
-        const orderDate = (o.fields['Order Date'] || '').slice(0, 10);
-        return supplierIds.includes(PRODUCTION_KITCHEN_SUPPLIER_ID) && orderDate === targetDateStr;
-      })
-      .map(o => o.fields['Restaurant'])
-  );
+  const existingOrderItems = await airtableGetAll('Order Items');
+  const ordersByRestaurant = {}; // restaurantName -> order record
+  for (const o of existingOrders) {
+    const supplierIds = o.fields['Supplier'] || [];
+    const orderDate = (o.fields['Order Date'] || '').slice(0, 10);
+    if (supplierIds.includes(PRODUCTION_KITCHEN_SUPPLIER_ID) && orderDate === targetDateStr) {
+      ordersByRestaurant[o.fields['Restaurant']] = o;
+    }
+  }
+  const alreadyOrdered = new Set(Object.keys(ordersByRestaurant));
 
   for (const [restaurantName, productQtys] of Object.entries(results)) {
-    if (alreadyOrdered.has(restaurantName)) {
-      console.log(`Skipping ${restaurantName}: an order for ${targetDateStr} from Groenk Production Kitchen already exists (idempotency guard).`);
+    const items = Object.entries(productQtys); // [productId, qty][]
+    const existingOrder = ordersByRestaurant[restaurantName];
+
+    if (!existingOrder) {
+      if (!items.length) continue;
+      const order = await airtableCreate('Orders', {
+        'Order Date': targetDateStr,
+        'Supplier': [PRODUCTION_KITCHEN_SUPPLIER_ID],
+        'Restaurant': restaurantName,
+        'Status': 'Pending',
+        'Created By': 'Auto (T+1)',
+      });
+      await airtableCreateMany('Order Items', items.map(([productId, qty]) => ({
+        'Order': [order.id],
+        'Product': [productId],
+        'Quantity': qty,
+        'Received': false,
+        'Invoice Match': 'Pending Review',
+      })));
+      console.log(`Created Order for ${restaurantName} with ${items.length} items.`);
       continue;
     }
-    const items = Object.entries(productQtys);
-    if (!items.length) continue;
-    const order = await airtableCreate('Orders', {
-      'Order Date': targetDateStr,
-      'Supplier': [PRODUCTION_KITCHEN_SUPPLIER_ID],
-      'Restaurant': restaurantName,
-      'Status': 'Pending',
-      'Created By': 'Auto (T+1)',
-    });
-    await airtableCreateMany('Order Items', items.map(([productId, qty]) => ({
-      'Order': [order.id],
-      'Product': [productId],
-      'Quantity': qty,
-      'Received': false,
-      'Invoice Match': 'Pending Review',
-    })));
-    console.log(`Created Order for ${restaurantName} with ${items.length} items.`);
+
+    const currentItems = existingOrderItems.filter(oi => (oi.fields['Order'] || []).includes(existingOrder.id));
+    if (currentItems.some(oi => oi.fields['Received'])) {
+      console.log(`Skipping ${restaurantName}: goods receiving has already started for today's order — not touching its items to avoid corrupting an in-progress receipt.`);
+      continue;
+    }
+
+    const currentByProduct = {};
+    for (const oi of currentItems) {
+      const productId = (oi.fields['Product'] || [])[0];
+      if (productId) currentByProduct[productId] = oi;
+    }
+    const wantedIds = new Set(items.map(([productId]) => productId));
+
+    const toUpdate = items
+      .filter(([productId, qty]) => currentByProduct[productId] && currentByProduct[productId].fields['Quantity'] !== qty)
+      .map(([productId, qty]) => ({ id: currentByProduct[productId].id, fields: { 'Quantity': qty } }));
+    const toCreate = items
+      .filter(([productId]) => !currentByProduct[productId])
+      .map(([productId, qty]) => ({
+        'Order': [existingOrder.id],
+        'Product': [productId],
+        'Quantity': qty,
+        'Received': false,
+        'Invoice Match': 'Pending Review',
+      }));
+    const toDelete = currentItems.filter(oi => !wantedIds.has((oi.fields['Product'] || [])[0])).map(oi => oi.id);
+
+    if (toUpdate.length) await airtableUpdateMany('Order Items', toUpdate);
+    if (toCreate.length) await airtableCreateMany('Order Items', toCreate);
+    if (toDelete.length) await airtableDeleteMany('Order Items', toDelete);
+    if (toUpdate.length || toCreate.length || toDelete.length) {
+      console.log(`Synced ${restaurantName}'s existing order: ${toUpdate.length} updated, ${toCreate.length} added, ${toDelete.length} removed.`);
+    }
   }
 
   // ---------- Build XLSX ----------
