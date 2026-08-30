@@ -2,18 +2,21 @@ name: Weekly Inventory Audit
 
 on:
   schedule:
-    # 12:00 Madrid (CEST, UTC+2) = 10:00 UTC, every Friday.
+    # ~12:00 Madrid (CEST, UTC+2) = ~10:07 UTC, every Friday.
     #
     # Timing logic (2026-08-27): staff arrive at 11:00 and their first task is
     # entering the physical count into the app ("Update count") — BEFORE any
     # same-day receiving/waste/prep, so the comparison is against a clean,
-    # settled ledger (06:30 Daily Consumption Deduction already ran, nothing
-    # new since). Counting takes about an hour, so the audit runs at 12:00,
+    # settled ledger (04:37 Daily Consumption Deduction already ran, nothing
+    # new since). Counting takes about an hour, so the audit runs at ~12:00,
     # giving staff the full 11:00-12:00 window; goods receiving for the day
     # then runs 12:00-17:00 as usual.
+    # CHANGED 2026-08-30: shifted from the exact hour (:00) to :07 — GitHub's own docs
+    # flag the top of the hour as the highest-load, most-delayed minute for scheduled
+    # workflows; a few minutes off the hour measurably reduces queueing delay.
     # NOTE: same DST caveat as the other scheduled workflows - in winter
-    # (CET, UTC+1) this will actually fire at 11:00 Madrid time, not 12:00.
-    - cron: '0 10 * * 5'
+    # (CET, UTC+1) this will actually fire at 11:07 Madrid time, not 12:07.
+    - cron: '7 10 * * 5'
   workflow_dispatch: {}
 
 jobs:
