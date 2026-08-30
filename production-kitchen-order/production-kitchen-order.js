@@ -85,7 +85,7 @@ function madridHour(date) {
 // instead, but only from the LAST tick of the window, so it fires at most once per day
 // and only once we're sure no earlier tick is still going to succeed.
 const LAST_TICK_UTC_HOUR = 5;
-const LAST_TICK_UTC_MINUTE = 30;
+const LAST_TICK_UTC_MINUTE = 37; // matches the '7,22,37 5 * * *' cron tick, updated 2026-08-30
 
 function isLastTickOfWindow(date) {
   return date.getUTCHours() === LAST_TICK_UTC_HOUR && date.getUTCMinutes() >= LAST_TICK_UTC_MINUTE;
