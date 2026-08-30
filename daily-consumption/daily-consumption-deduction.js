@@ -53,7 +53,7 @@ if (!AIRTABLE_TOKEN) {
 // LAST scheduled tick of the window checks readiness and alerts, so it fires at most once
 // a day and only once we're sure no earlier tick is still going to catch up.
 const LAST_TICK_UTC_HOUR = 2;
-const LAST_TICK_UTC_MINUTE = 30;
+const LAST_TICK_UTC_MINUTE = 37; // matches the '7,22,37 2 * * *' cron tick, updated 2026-08-30
 
 function isLastTickOfWindow(date) {
   return date.getUTCHours() === LAST_TICK_UTC_HOUR && date.getUTCMinutes() >= LAST_TICK_UTC_MINUTE;
