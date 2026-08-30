@@ -11,19 +11,25 @@ on:
     #   Deduction (this file)   03:45-04:30 Madrid  <- comfortable buffer after both imports
     #   Production Kitchen Order 07:00-07:30 Madrid <- unchanged, huge slack now
     #
-    # Runs every 15 min, 01:45-02:30 UTC = 03:45-04:30 Madrid (CEST, summer).
+    # Runs every 15 min, 01:52-02:37 UTC = 03:52-04:37 Madrid (CEST, summer).
+    # CHANGED 2026-08-30 (again, same day): shifted off the round quarter-hours (:00,
+    # :15, :30, :45) onto :07/:22/:37/:52 instead. GitHub's own docs say scheduled
+    # workflows are most likely to be delayed "at the start of every hour" and general
+    # community data shows :00/:15/:30/:45 are the most congested minutes across all of
+    # GitHub Actions — off-beat minutes see measurably less queueing delay. Costs
+    # nothing, no plan upgrade needed.
     # NOTE: tuned for CEST. Revisit in October when clocks go back to CET (see the
     # production-kitchen-order workflow for the same caveat) — until then this is fine.
     # Safe to run this often: the script is idempotent (only ever processes Daily Sales
     # records not yet marked "Stock Deducted"), so early ticks before the day's sales
     # have been imported are simply no-ops.
     #
-    # If, by the LAST tick (02:30 UTC / 04:30 Madrid), any restaurant still has no Daily
+    # If, by the LAST tick (02:37 UTC / 04:37 Madrid), any restaurant still has no Daily
     # Sales at all for yesterday's date, the script sends a "missed" alert instead of
     # staying silent — mirrors the same pattern already used in the Production Kitchen
     # Order workflow.
-    - cron: '45 1 * * *'
-    - cron: '0,15,30 2 * * *'
+    - cron: '52 1 * * *'
+    - cron: '7,22,37 2 * * *'
   workflow_dispatch: {}
 
 jobs:
