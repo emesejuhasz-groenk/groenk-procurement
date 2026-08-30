@@ -2,15 +2,28 @@ name: Daily Stock Consumption Deduction
 
 on:
   schedule:
-    # Runs every 15 min, 04:00-04:45 UTC = 06:00-06:45 Madrid (CEST, summer) — i.e. the
-    # 06:00-06:59 window. Stops before 07:00 so it never overlaps with the Production
-    # Kitchen Order workflow's own 07:00-07:30 window (no simultaneous-tick race).
+    # CHANGED 2026-08-30: moved much earlier. HiOPOS emails the nightly POS report at a
+    # fixed 02:00-02:30 Madrid time that Emese cannot change, so the whole chain now
+    # starts right after that instead of waiting until morning:
+    #   HiOPOS report          ~02:00-02:30 Madrid (fixed, external)
+    #   Cowork import (primary) 03:00 Madrid
+    #   Cowork import (backup)  03:30 Madrid
+    #   Deduction (this file)   03:45-04:30 Madrid  <- comfortable buffer after both imports
+    #   Production Kitchen Order 07:00-07:30 Madrid <- unchanged, huge slack now
+    #
+    # Runs every 15 min, 01:45-02:30 UTC = 03:45-04:30 Madrid (CEST, summer).
     # NOTE: tuned for CEST. Revisit in October when clocks go back to CET (see the
     # production-kitchen-order workflow for the same caveat) — until then this is fine.
     # Safe to run this often: the script is idempotent (only ever processes Daily Sales
     # records not yet marked "Stock Deducted"), so early ticks before the day's sales
     # have been imported are simply no-ops.
-    - cron: '*/15 4 * * *'
+    #
+    # If, by the LAST tick (02:30 UTC / 04:30 Madrid), any restaurant still has no Daily
+    # Sales at all for yesterday's date, the script sends a "missed" alert instead of
+    # staying silent — mirrors the same pattern already used in the Production Kitchen
+    # Order workflow.
+    - cron: '45 1 * * *'
+    - cron: '0,15,30 2 * * *'
   workflow_dispatch: {}
 
 jobs:
@@ -32,4 +45,6 @@ jobs:
       - name: Run daily consumption deduction script
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: npm start
