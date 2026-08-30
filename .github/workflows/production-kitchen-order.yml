@@ -2,11 +2,16 @@ name: Production Kitchen T+1 auto-order
 
 on:
   schedule:
-    # Runs every 15 min, 05:00-05:30 UTC = 07:00-07:30 Madrid (CEST, summer) — unchanged
-    # as of the 2026-08-30 timing rework. The Daily Stock Consumption Deduction workflow
-    # now runs much earlier (01:45-02:30 UTC / 03:45-04:30 Madrid, right after HiOPOS +
-    # the Cowork imports), so there's a large (~2.5h) safety buffer before this window
-    # even starts — no overlapping/simultaneous ticks with Deduction.
+    # Runs every 15 min, 05:07-05:37 UTC = 07:07-07:37 Madrid (CEST, summer) — window
+    # itself unchanged as of the 2026-08-30 timing rework (Daily Stock Consumption
+    # Deduction now runs much earlier, 01:52-02:37 UTC / 03:52-04:37 Madrid, right after
+    # HiOPOS + the Cowork imports, so there's a large ~2.5h safety buffer before this
+    # window even starts — no overlapping/simultaneous ticks with Deduction).
+    #
+    # CHANGED 2026-08-30 (again, same day): shifted the 3 ticks off the round quarter-
+    # hours (:00/:15/:30) onto :07/:22/:37 — GitHub's own docs flag round hour/quarter
+    # minutes as the most congested for scheduled workflows, and off-beat minutes
+    # measurably reduce queueing delay. No plan upgrade needed for this.
     # NOTE: tuned for CEST. Revisit in October when clocks go back to CET — until then
     # this is fine.
     #
@@ -14,9 +19,9 @@ on:
     # that the Daily Stock Consumption Deduction job has already caught up on today's
     # Daily Sales data before computing an order, and uses the Orders table (not GitHub
     # run history) to avoid sending more than one email per day. If the last tick
-    # (05:30 UTC / 07:30 Madrid) still isn't ready, it sends a "missed" alert instead
+    # (05:37 UTC / 07:37 Madrid) still isn't ready, it sends a "missed" alert instead
     # of staying silent.
-    - cron: '0,15,30 5 * * *'
+    - cron: '7,22,37 5 * * *'
   workflow_dispatch:
     inputs:
       send_email:
