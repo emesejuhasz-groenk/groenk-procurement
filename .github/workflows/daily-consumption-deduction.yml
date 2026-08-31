@@ -2,6 +2,14 @@ name: Daily Stock Consumption Deduction
 
 on:
   schedule:
+    # RE-TOUCHED 2026-08-31: the cron itself is unchanged from yesterday's edit — this
+    # comment-only commit exists purely to force GitHub to re-register the schedule
+    # trigger. Confirmed via the Actions API that after yesterday's cron change, this
+    # workflow had ZERO scheduled runs overnight (not late, not failed — never
+    # triggered at all). This is a documented GitHub Actions quirk: right after a cron
+    # change, the very next scheduled window can get silently skipped while GitHub
+    # re-registers it internally; a small commit to the workflow file is the standard
+    # workaround.
     # CHANGED 2026-08-30: moved much earlier. HiOPOS emails the nightly POS report at a
     # fixed 02:00-02:30 Madrid time that Emese cannot change, so the whole chain now
     # starts right after that instead of waiting until morning:
