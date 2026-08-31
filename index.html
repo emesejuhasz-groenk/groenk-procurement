@@ -2,6 +2,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -193,6 +194,14 @@ const BULK_LITER_PRODUCTS = {
   'recMaHap0Kptnyc8N': 10,
 };
 const KEG_PRODUCTS = { 'recg4kyyl1P4ionxe': 30 };
+// Spirits poured by the cl/ml (BOM records the shot size) but ORDERED as whole bottles
+// (Product Unit = "unit"). Added 2026-08-31 — these fell through convertQty as
+// "unreliable" once order suggestions started looking at more than one day of sales.
+const SPIRIT_UNIT_ML = {
+  'recUriSKeofDsx7kv': 1000, // Vodka Grey Goose 1l
+  'recTGua3HEngFSkYa': 700,  // Ron Diplomatico Reserva Exclusiva 0,700
+  'recdqGIw0Ou0Gy5GV': 700,  // Suau 15ys brandy (confirmed with Emese 2026-08-31)
+};
 
 // ---------- Shared ledger helpers ----------
 // A physical count (Manual Adjustment with a "Manual count" note) resets the ledger:
@@ -227,6 +236,12 @@ function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) 
   if (f === t) return qty;
   if (WEIGHT_TO_GRAMS[f] && WEIGHT_TO_GRAMS[t]) return qty * WEIGHT_TO_GRAMS[f] / WEIGHT_TO_GRAMS[t];
   if (VOLUME_TO_ML[f] && VOLUME_TO_ML[t]) return qty * VOLUME_TO_ML[f] / VOLUME_TO_ML[t];
+  const spiritUnitMl = SPIRIT_UNIT_ML[productId];
+  if (spiritUnitMl && t === 'unit') {
+    const ml = VOLUME_TO_ML[f] ? qty * VOLUME_TO_ML[f] : null;
+    if (ml === null) return null;
+    return ml / spiritUnitMl;
+  }
   const bottleInfo = BOTTLE_PRODUCTS[productId];
   if (bottleInfo && t.includes('box')) {
     const bottles = f === 'bottle' ? qty : (VOLUME_TO_ML[f] ? (qty * VOLUME_TO_ML[f]) / bottleInfo.bottleMl : qty);
@@ -261,6 +276,19 @@ function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) 
 
 // Matches the buffer used in production-kitchen-order.js (confirmed 2026-08-29).
 const ORDER_SUGGESTION_BUFFER = 1.5;
+// How many days a suggestion must cover until the NEXT expected delivery, keyed off
+// each Product's own "Order Frequency" field. Added 2026-08-31: previously every
+// non-PK supplier used the same "yesterday's single day of sales" basis as the daily
+// Production Kitchen order — fine for a supplier that delivers every day, but wrong
+// for a weekly supplier (e.g. Tunel/wine): one noisy day (or a day a given item
+// happened not to sell at all) produced a 0 suggestion despite steady sales across
+// the week. See conversation 2026-08-31 (Cruz de Alba showing 0 despite running low).
+const ORDER_FREQUENCY_COVERAGE_DAYS = {
+  '1 – 6x per week': 1,
+  '2 – 3x per week': 3,
+  '3 – 1x per week': 7,
+};
+const DEFAULT_COVERAGE_DAYS = 1; // used if a product has no Order Frequency set
 
 // Maps an Employees record (Role + Department) to this app's permission level.
 function mapEmployeeToAppRole(fields) {
@@ -517,29 +545,40 @@ function NewOrderScreen({ user, api }) {
     return computeCurrentStock(invTxns, productId, userLocationId);
   }
 
-  // Computes a suggested order quantity per product for this supplier. Matches
-  // production-kitchen-order.js (confirmed 2026-08-29): required stock today =
-  // YESTERDAY's actual units sold (single most recent day, no averaging) x 1.5,
-  // minus current stock, always rounded up.
+  // Computes a suggested order quantity per product for this supplier. For
+  // Production Kitchen (daily delivery) this stays out of scope entirely — that
+  // supplier keeps its own dedicated formula in production-kitchen-order.js
+  // (yesterday's single day of sales x 1.5, since "tomorrow" is always the target).
+  // For every other supplier (updated 2026-08-31): average daily sales over the last
+  // 7 days (not a single day — a supplier with weekly delivery shouldn't be judged on
+  // one noisy day), x each product's own coverage window (from its Order Frequency —
+  // a weekly-delivery wine needs to last 7 days until the next order, not 1) x the
+  // same 1.5 buffer, minus current stock, rounded up.
   function computeSuggestions() {
     if (isProductionKitchen || !userLocationId) return { result: {}, unreliableCount: 0 };
     const unreliableProducts = new Set();
     const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(userLocationId));
-    const recentDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse().slice(0, 1);
+    const allDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse();
+    const recentDates = allDates.slice(0, 7);
     const recentSales = salesHere.filter(s => recentDates.includes(s.fields['Date']));
+    const daysCovered = recentDates.length || 1;
 
     const salesByMenuItem = {};
     for (const s of recentSales) {
       const units = Number(s.fields['Units sold']) || 0;
       for (const miId of (s.fields['Menu Item'] || [])) (salesByMenuItem[miId] = salesByMenuItem[miId] || []).push(units);
     }
+    // Per-day average across the whole window (including days it didn't sell at all),
+    // not per-row — a glass of wine sold on 3 of the last 7 days still needs its true
+    // daily average, zero-days included, or a weekly order undershoots badly.
     const avgUnitsSold = {};
-    for (const [miId, arr] of Object.entries(salesByMenuItem)) avgUnitsSold[miId] = arr.reduce((a,b)=>a+b, 0);
+    for (const [miId, arr] of Object.entries(salesByMenuItem)) avgUnitsSold[miId] = arr.reduce((a,b)=>a+b, 0) / daysCovered;
 
     const supplierProductIds = new Set(filteredProducts.map(p => p.id));
     const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
     const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
     const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
+    const productCoverageDaysById = Object.fromEntries(products.map(p => [p.id, ORDER_FREQUENCY_COVERAGE_DAYS[p.fields['Order Frequency']] || DEFAULT_COVERAGE_DAYS]));
 
     const avgConsumption = {};
     for (const r of recipes) {
@@ -553,14 +592,15 @@ function NewOrderScreen({ user, api }) {
         for (const productId of compIds) {
           const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId, productPackSizeById[productId], productWeightPerUnitById[productId]);
           if (converted === null) { unreliableProducts.add(productId); continue; }
-          avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
+          avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted; // avgUnits is now a per-day average
         }
       }
     }
 
     const result = {};
-    for (const [productId, avg] of Object.entries(avgConsumption)) {
-      const par = avg * ORDER_SUGGESTION_BUFFER;
+    for (const [productId, avgPerDay] of Object.entries(avgConsumption)) {
+      const coverageDays = productCoverageDaysById[productId] || DEFAULT_COVERAGE_DAYS;
+      const par = avgPerDay * coverageDays * ORDER_SUGGESTION_BUFFER;
       const qty = Math.max(0, Math.ceil(par - currentStock(productId)));
       if (qty > 0) result[productId] = qty;
     }
