@@ -278,12 +278,16 @@ function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) 
 // Matches the buffer used in production-kitchen-order.js (confirmed 2026-08-29).
 const ORDER_SUGGESTION_BUFFER = 1.5;
 // How many days a suggestion must cover until the NEXT expected delivery, keyed off
-// each Product's own "Order Frequency" field. Added 2026-08-31: previously every
-// non-PK supplier used the same "yesterday's single day of sales" basis as the daily
-// Production Kitchen order — fine for a supplier that delivers every day, but wrong
-// for a weekly supplier (e.g. Tunel/wine): one noisy day (or a day a given item
-// happened not to sell at all) produced a 0 suggestion despite steady sales across
-// the week. See conversation 2026-08-31 (Cruz de Alba showing 0 despite running low).
+// each Product's "Shelf Life Code" field (misleadingly named — it actually stores
+// order frequency, e.g. "3 – 1x per week", not a shelf-life value). Added 2026-08-31,
+// bug found and fixed 2026-09-01 (was reading a nonexistent "Order Frequency" field —
+// confirmed via the browser console on Emese's real data that this is the real name):
+// previously every non-PK supplier used the same "yesterday's single day of sales"
+// basis as the daily Production Kitchen order — fine for a supplier that delivers
+// every day, but wrong for a weekly supplier (e.g. Tunel/wine): one noisy day (or a
+// day a given item happened not to sell at all) produced a 0 suggestion despite
+// steady sales across the week. See conversation 2026-08-31 (Cruz de Alba showing 0
+// despite running low).
 const ORDER_FREQUENCY_COVERAGE_DAYS = {
   '1 – 6x per week': 1,
   '2 – 3x per week': 3,
@@ -293,7 +297,7 @@ const ORDER_FREQUENCY_COVERAGE_DAYS = {
   // Wednesday's delivery — that's 8 days, not a plain 7-day week.
   '3 – 1x per week': 8,
 };
-const DEFAULT_COVERAGE_DAYS = 1; // used if a product has no Order Frequency set
+const DEFAULT_COVERAGE_DAYS = 1; // used if a product has no "Shelf Life Code" (order frequency) value set
 
 // Maps an Employees record (Role + Department) to this app's permission level.
 function mapEmployeeToAppRole(fields) {
@@ -556,7 +560,8 @@ function NewOrderScreen({ user, api }) {
   // (yesterday's single day of sales x 1.5, since "tomorrow" is always the target).
   // For every other supplier (updated 2026-08-31): average daily sales over the last
   // 7 days (not a single day — a supplier with weekly delivery shouldn't be judged on
-  // one noisy day), x each product's own coverage window (from its Order Frequency —
+  // one noisy day), x each product's own coverage window (from its "Shelf Life Code"
+  // field, which actually stores order frequency —
   // a weekly-delivery wine needs to last 7 days until the next order, not 1) x the
   // same 1.5 buffer, minus current stock, rounded up.
   function computeSuggestions() {
@@ -583,7 +588,7 @@ function NewOrderScreen({ user, api }) {
     const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
     const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
     const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
-    const productCoverageDaysById = Object.fromEntries(products.map(p => [p.id, ORDER_FREQUENCY_COVERAGE_DAYS[p.fields['Order Frequency']] || DEFAULT_COVERAGE_DAYS]));
+    const productCoverageDaysById = Object.fromEntries(products.map(p => [p.id, ORDER_FREQUENCY_COVERAGE_DAYS[p.fields['Shelf Life Code']] || DEFAULT_COVERAGE_DAYS]));
 
     const avgConsumption = {};
     for (const r of recipes) {
