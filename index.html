@@ -287,7 +287,11 @@ const ORDER_SUGGESTION_BUFFER = 1.5;
 const ORDER_FREQUENCY_COVERAGE_DAYS = {
   '1 – 6x per week': 1,
   '2 – 3x per week': 3,
-  '3 – 1x per week': 7,
+  // Confirmed with Emese 2026-09-01: weekly-frequency products (Tunel wine) are
+  // always ORDERED on Tuesday and DELIVERED the next day (Wednesday). Stock checked
+  // on order day must last from that Tuesday all the way to the FOLLOWING
+  // Wednesday's delivery — that's 8 days, not a plain 7-day week.
+  '3 – 1x per week': 8,
 };
 const DEFAULT_COVERAGE_DAYS = 1; // used if a product has no Order Frequency set
 
@@ -647,7 +651,7 @@ function NewOrderScreen({ user, api }) {
         </select>
         {isProductionKitchen && (
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
-            Production Kitchen orders are generated automatically each morning — no suggestions here, but you can still add extra items manually.
+            Production Kitchen orders are handled by the kitchen's own "Today's prep" screen each morning — no suggestions here, but you can still add extra items manually.
           </div>
         )}
         {!isProductionKitchen && skippedCount > 0 && (
@@ -1547,6 +1551,226 @@ function InfoScreen() {
   );
 }
 
+// ---------- Production Kitchen: Today's Prep ----------
+// Added 2026-08-31, replacing the emailed daily order for the Production Kitchen.
+// Why: the GitHub Actions cron trigger for the automated order proved unreliable on
+// this account (confirmed via two separate incidents — registration lag after a cron
+// change, then repeated 6+ hour delays even once "working") — no amount of workflow
+// tuning fixed it, because GitHub gives no timing guarantee for `schedule` triggers.
+// This screen removes that dependency entirely for the ORDER step: it computes the
+// same suggestion formula LIVE, client-side, the moment a Production Kitchen staff
+// member opens the tab — nothing waits on a cron firing at the right minute.
+// The Daily Stock Consumption Deduction job still needs to run each morning (this
+// screen's "current stock" numbers depend on it), so that dependency remains — but
+// it's now the only one left, down from three (Deduction + PK order script + email).
+const RESTAURANT_ORDER = ['Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Soller - Groenk Pizza'];
+
+function PrepScreen({ user, api }) {
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState([]);
+  const [recipes, setRecipes] = useState([]);
+  const [dailySales, setDailySales] = useState([]);
+  const [invTxns, setInvTxns] = useState([]);
+  const [existingOrders, setExistingOrders] = useState([]);
+  const [existingOrderItems, setExistingOrderItems] = useState([]);
+  const [activeRestaurant, setActiveRestaurant] = useState(RESTAURANT_ORDER[0]);
+  const [editedQtys, setEditedQtys] = useState({}); // `${restaurant}|${productId}` -> string
+  const [checkedOff, setCheckedOff] = useState({}); // `${restaurant}|${productId}` -> bool (local prep checklist only, not written to Airtable)
+  const [saving, setSaving] = useState(false);
+  const [justSent, setJustSent] = useState({}); // restaurant -> true, resets on reload
+
+  async function loadAll() {
+    setLoading(true);
+    const [p, r, ds, it, ords, ordItems] = await Promise.all([
+      api.getAll('Products'), api.getAll('Recipes (BOM)'), api.getAll('Daily Sales'),
+      api.getAll('Inventory Transactions'), api.getAll('Orders'), api.getAll('Order Items'),
+    ]);
+    setProducts(p); setRecipes(r); setDailySales(ds); setInvTxns(it);
+    setExistingOrders(ords); setExistingOrderItems(ordItems);
+    setLoading(false);
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  const productById = React.useMemo(() => Object.fromEntries(products.map(p => [p.id, p.fields])), [products]);
+
+  // suggestions[restaurantName] = { productId: qty } — mirrors production-kitchen-order.js
+  // exactly (yesterday's single most recent day of sales × 1.5, minus current stock).
+  const suggestions = React.useMemo(() => {
+    if (loading) return {};
+    const pkProductIds = new Set(products.filter(p => (p.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID)).map(p => p.id));
+    const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
+    const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
+    const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
+
+    const bomByMenuItem = {};
+    for (const r of recipes) {
+      const compIds = (r.fields['Component (Product)'] || []).filter(id => pkProductIds.has(id));
+      if (!compIds.length) continue;
+      const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
+      const bomUnit = r.fields['Unit'] || 'unit';
+      for (const miId of (r.fields['Menu Item'] || [])) {
+        for (const productId of compIds) (bomByMenuItem[miId] = bomByMenuItem[miId] || []).push({ productId, qtyPerUnit, bomUnit });
+      }
+    }
+
+    const out = {};
+    for (const restaurantName of RESTAURANT_ORDER) {
+      const locationId = LOCATION_IDS[restaurantName];
+      const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
+      const recentDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse().slice(0, 1);
+      const recentSales = salesHere.filter(s => recentDates.includes(s.fields['Date']));
+      const salesByMenuItem = {};
+      for (const s of recentSales) {
+        const units = Number(s.fields['Units sold']) || 0;
+        for (const miId of (s.fields['Menu Item'] || [])) (salesByMenuItem[miId] = salesByMenuItem[miId] || []).push(units);
+      }
+      const avgUnitsSold = {};
+      for (const [miId, arr] of Object.entries(salesByMenuItem)) avgUnitsSold[miId] = arr.reduce((a, b) => a + b, 0);
+
+      const avgConsumption = {};
+      for (const [miId, avgUnits] of Object.entries(avgUnitsSold)) {
+        const bom = bomByMenuItem[miId];
+        if (!bom) continue;
+        for (const { productId, qtyPerUnit, bomUnit } of bom) {
+          const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId, productPackSizeById[productId], productWeightPerUnitById[productId]);
+          if (converted === null) continue;
+          avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
+        }
+      }
+      const restaurantResult = {};
+      for (const [productId, avg] of Object.entries(avgConsumption)) {
+        const par = avg * ORDER_SUGGESTION_BUFFER;
+        const stock = computeCurrentStock(invTxns, productId, locationId);
+        const qty = Math.max(0, Math.ceil(par - stock));
+        if (qty > 0) restaurantResult[productId] = qty;
+      }
+      out[restaurantName] = restaurantResult;
+    }
+    return out;
+  }, [loading, products, recipes, dailySales, invTxns]);
+
+  const today = new Date().toISOString().slice(0, 10);
+  function existingOrderFor(restaurantName) {
+    return existingOrders.find(o => (o.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID) && o.fields['Restaurant'] === restaurantName && (o.fields['Order Date'] || '').slice(0, 10) === today);
+  }
+  function existingItemFor(restaurantName, productId) {
+    const order = existingOrderFor(restaurantName);
+    if (!order) return null;
+    return existingOrderItems.find(oi => (oi.fields['Order'] || []).includes(order.id) && (oi.fields['Product'] || [])[0] === productId) || null;
+  }
+  function qtyFor(restaurantName, productId) {
+    const key = `${restaurantName}|${productId}`;
+    if (editedQtys[key] !== undefined) return editedQtys[key];
+    const existingItem = existingItemFor(restaurantName, productId);
+    if (existingItem) return String(existingItem.fields['Quantity']);
+    return String(suggestions[restaurantName]?.[productId] ?? 0);
+  }
+
+  async function confirmAndSend(restaurantName) {
+    setSaving(true);
+    try {
+      const productIds = new Set([
+        ...Object.keys(suggestions[restaurantName] || {}),
+        ...existingOrderItems.filter(oi => existingOrderFor(restaurantName) && (oi.fields['Order'] || []).includes(existingOrderFor(restaurantName).id)).map(oi => (oi.fields['Product'] || [])[0]),
+      ]);
+      const items = [...productIds].map(productId => [productId, Number(qtyFor(restaurantName, productId)) || 0]).filter(([, qty]) => qty > 0);
+
+      let order = existingOrderFor(restaurantName);
+      if (!order) {
+        order = await api.create('Orders', { 'Order Date': today, 'Supplier': [PRODUCTION_KITCHEN_SUPPLIER_ID], 'Restaurant': restaurantName, 'Status': 'Ordered', 'Created By': user.name });
+      } else {
+        await api.update('Orders', order.id, { 'Status': 'Ordered' });
+      }
+      const currentItems = existingOrderItems.filter(oi => (oi.fields['Order'] || []).includes(order.id));
+      const currentByProduct = Object.fromEntries(currentItems.map(oi => [(oi.fields['Product'] || [])[0], oi]));
+      for (const [productId, qty] of items) {
+        if (currentByProduct[productId]) {
+          if (currentByProduct[productId].fields['Quantity'] !== qty) await api.update('Order Items', currentByProduct[productId].id, { 'Quantity': qty });
+        } else {
+          await api.createMany('Order Items', [{ 'Order': [order.id], 'Product': [productId], 'Quantity': qty, 'Received': false, 'Invoice Match': 'Pending Review' }]);
+        }
+      }
+      setJustSent(s => ({ ...s, [restaurantName]: true }));
+      await loadAll();
+    } catch (e) { alert('Error: ' + e.message); }
+    finally { setSaving(false); }
+  }
+
+  if (loading) return <div className="content"><Loader /></div>;
+
+  const productIdsForRestaurant = [...new Set([
+    ...Object.keys(suggestions[activeRestaurant] || {}),
+    ...(existingOrderFor(activeRestaurant) ? existingOrderItems.filter(oi => (oi.fields['Order'] || []).includes(existingOrderFor(activeRestaurant).id)).map(oi => (oi.fields['Product'] || [])[0]) : []),
+  ])].filter(Boolean).sort((a, b) => (productById[a]?.['Name'] || '').localeCompare(productById[b]?.['Name'] || ''));
+
+  const alreadySentToday = !!existingOrderFor(activeRestaurant) && existingOrderFor(activeRestaurant).fields['Status'] !== 'Pending';
+
+  return (
+    <div className="content">
+      <div style={{ marginBottom: '1.25rem' }}>
+        <div className="section-label">Today's prep — {today}</div>
+        <div className="nav-scroll" style={{ marginTop: 8 }}>
+          {RESTAURANT_ORDER.map(r => (
+            <button key={r} className={`nav-btn ${activeRestaurant === r ? 'active' : ''}`}
+              style={activeRestaurant !== r ? { background: 'var(--cream)', color: 'var(--petrol)', borderColor: 'var(--border-strong)' } : {}}
+              onClick={() => setActiveRestaurant(r)}>
+              {r.split(' - ')[0]}
+              {Object.keys(suggestions[r] || {}).length > 0 && <span style={{ marginLeft: 6, opacity: 0.7 }}>({Object.keys(suggestions[r]).length})</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {productIdsForRestaurant.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: 14 }}>
+          Nothing needed for {activeRestaurant.split(' - ')[0]} right now.
+        </div>
+      ) : (
+        <div>
+          {productIdsForRestaurant.map(productId => {
+            const key = `${activeRestaurant}|${productId}`;
+            const p = productById[productId] || {};
+            const suggested = suggestions[activeRestaurant]?.[productId];
+            const isChecked = !!checkedOff[key];
+            return (
+              <div key={productId} className="product-row" style={isChecked ? { opacity: 0.5 } : {}}>
+                <button className="qty-btn" style={{ background: isChecked ? 'var(--petrol)' : '#fff', borderColor: 'var(--border-strong)', flexShrink: 0 }}
+                  onClick={() => setCheckedOff(c => ({ ...c, [key]: !c[key] }))}>
+                  {isChecked && <i className="ti ti-check" style={{ fontSize: 16, color: '#fff' }}></i>}
+                </button>
+                <div style={{ flex: 1 }}>
+                  <div className="product-name">{p['Name']}</div>
+                  <div className="product-unit">
+                    {p['Unit']}
+                    {suggested !== undefined && <span style={{ marginLeft: 6, color: 'var(--petrol)', fontWeight: 700 }}>· suggested {suggested}</span>}
+                  </div>
+                </div>
+                <div className="qty-controls">
+                  <input type="text" inputMode="numeric" placeholder="0" value={qtyFor(activeRestaurant, productId)}
+                    onChange={e => setEditedQtys(q => ({ ...q, [key]: e.target.value.replace(',', '.') }))}
+                    className="qty-input" style={{ width: 56 }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <button className="btn-primary" style={{ marginTop: '1.25rem' }} onClick={() => confirmAndSend(activeRestaurant)} disabled={saving || productIdsForRestaurant.length === 0}>
+        {saving ? <span className="spinner"></span> : (alreadySentToday ? 'Update sent order' : 'Confirm & mark as sent')}
+      </button>
+      {justSent[activeRestaurant] && (
+        <div style={{ textAlign: 'center', marginTop: 10, fontSize: 13, color: 'var(--text-success)', fontWeight: 600 }}>
+          ✓ Saved — {activeRestaurant.split(' - ')[0]} will see this in Open Orders / Receive Goods.
+        </div>
+      )}
+      <div className="btn-ghost" style={{ marginTop: 14, textAlign: 'center', fontSize: 11 }}>
+        The check mark is just a prep checklist for you on this device — it isn't saved. "Confirm & mark as sent" is what the restaurant actually sees.
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('groenk_token') || '');
   const [user, setUser] = useState(null);
@@ -1555,6 +1779,7 @@ function App() {
   const staffApi = token ? airtable(token, STAFF_BASE_ID) : null;
 
   const tabs = [
+    { id: 'prep', label: "Today's prep", icon: 'ti-list-check', roles: ['kitchen', 'admin', 'manager'], restaurants: ['Groenk Production Kitchen Fornalutx'] },
     { id: 'new', label: 'New order', icon: 'ti-plus', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'pending', label: 'Open orders', icon: 'ti-clock', roles: ['kitchen', 'admin', 'manager'] },
     { id: 'delivery', label: 'Receive goods', icon: 'ti-truck', roles: ['kitchen', 'admin', 'manager'] },
@@ -1566,7 +1791,7 @@ function App() {
   ];
 
   if (!token) return <SetupScreen onSave={setToken} />;
-  if (!user) return <AccessCodeScreen staffApi={staffApi} onLogin={(u) => { setUser(u); setTab(u.role === 'manager' ? 'invoice' : 'new'); }} />;
+  if (!user) return <AccessCodeScreen staffApi={staffApi} onLogin={(u) => { setUser(u); setTab(u.role === 'manager' ? 'invoice' : (u.restaurant === 'Groenk Production Kitchen Fornalutx' ? 'prep' : 'new')); }} />;
 
   return (
     <div>
@@ -1583,13 +1808,14 @@ function App() {
           </button>
         </div>
         <div className="nav-scroll">
-          {tabs.filter(t => t.roles.includes(user.role)).map(t => (
+          {tabs.filter(t => t.roles.includes(user.role) && (!t.restaurants || t.restaurants.includes(user.restaurant))).map(t => (
             <button key={t.id} className={`nav-btn ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
               <i className={`ti ${t.icon}`} style={{ fontSize: 15 }}></i>{t.label}
             </button>
           ))}
         </div>
       </div>
+      {tab === 'prep' && <PrepScreen user={user} api={api} />}
       {tab === 'new' && <NewOrderScreen user={user} api={api} />}
       {tab === 'pending' && <PendingOrdersScreen user={user} api={api} />}
       {tab === 'delivery' && <DeliveryScreen user={user} api={api} />}
