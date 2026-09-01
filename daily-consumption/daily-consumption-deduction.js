@@ -52,8 +52,15 @@ if (!AIRTABLE_TOKEN) {
 // hand. Mirrors the same pattern already used in production-kitchen-order.js: only the
 // LAST scheduled tick of the window checks readiness and alerts, so it fires at most once
 // a day and only once we're sure no earlier tick is still going to catch up.
-const LAST_TICK_UTC_HOUR = 2;
-const LAST_TICK_UTC_MINUTE = 37; // matches the '7,22,37 2 * * *' cron tick, updated 2026-08-30
+// UPDATED 2026-09-01: the workflow's cron window was widened from 03:52-04:37 Madrid to
+// 03:07-09:52 Madrid (01:07-07:52 UTC), because real GitHub Actions runs during Aug 29 -
+// Sep 1 landed 5-6 hours late, and on Aug 28 (right after a cron edit) the scheduled
+// trigger never fired at all. The old hardcoded 02:37 UTC "last tick" below was stale
+// after that change — it would have kept firing the missed-window alert at 02:37 every
+// day even though the workflow now runs ticks all the way to 07:52 UTC, sending false
+// alarms hours before the real last chance to catch up. Updated to match the new window.
+const LAST_TICK_UTC_HOUR = 7;
+const LAST_TICK_UTC_MINUTE = 52; // matches the last tick of the '7,22,37,52 1-7 * * *' cron, updated 2026-09-01
 
 function isLastTickOfWindow(date) {
   return date.getUTCHours() === LAST_TICK_UTC_HOUR && date.getUTCMinutes() >= LAST_TICK_UTC_MINUTE;
@@ -227,7 +234,7 @@ async function main() {
           subject: `⚠️ Daily Stock Consumption Deduction MISSED for ${yesterday}`,
           text:
             `No Daily Sales data was found for ${yesterday} for: ${missing.join(', ')} — the morning window ` +
-            `(01:45–02:30 UTC / 03:45–04:30 Madrid) ended without it. Consumption was NOT deducted for ${missing.length === 1 ? 'this restaurant' : 'these restaurants'}, ` +
+            `(01:07–07:52 UTC / 03:07–09:52 Madrid) ended without it. Consumption was NOT deducted for ${missing.length === 1 ? 'this restaurant' : 'these restaurants'}, ` +
             `so today's stock figures (and the Production Kitchen order built from them) will be too high.\n\n` +
             `Likely cause: the Cowork POS import task(s) didn't complete or failed. Check the Cowork Scheduled ` +
             `tasks page and the Airtable Daily Sales table, then re-run "Daily Stock Consumption Deduction" ` +
