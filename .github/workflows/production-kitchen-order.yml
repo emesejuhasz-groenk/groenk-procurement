@@ -1,54 +1,55 @@
 name: Production Kitchen T+1 auto-order
-
 on:
+  workflow_run:
+    # CHANGED 2026-09-01: replaced the fixed-time schedule with a dependency on the
+    # Daily Stock Consumption Deduction workflow's own completion. The old schedule
+    # (05:07-05:37 UTC / 07:07-07:37 Madrid) assumed Deduction would always be done by
+    # then — but Deduction's own window was widened the same day to 01:07-07:52 UTC
+    # because real runs have landed anywhere from on-time to 5-6 hours late. A
+    # calendar-time trigger for this workflow could no longer guarantee Deduction had
+    # actually finished first, which would mean computing today's order off yesterday's
+    # (not-yet-deducted) stock — the exact bug we spent today fixing. Triggering off the
+    # upstream workflow's completion event removes the race entirely: this cannot start
+    # until Deduction has actually finished, whatever time that turns out to be.
+    workflows: ["Daily Stock Consumption Deduction"]
+    types: [completed]
   schedule:
-    # RE-TOUCHED 2026-08-31: same as the Daily Stock Consumption Deduction workflow —
-    # comment-only commit to force GitHub to re-register the schedule after yesterday's
-    # cron change (confirmed via the Actions API: zero scheduled runs overnight, not
-    # late/failed, just never triggered — a documented GitHub Actions quirk).
-    # Runs every 15 min, 05:07-05:37 UTC = 07:07-07:37 Madrid (CEST, summer) — window
-    # itself unchanged as of the 2026-08-30 timing rework (Daily Stock Consumption
-    # Deduction now runs much earlier, 01:52-02:37 UTC / 03:52-04:37 Madrid, right after
-    # HiOPOS + the Cowork imports, so there's a large ~2.5h safety buffer before this
-    # window even starts — no overlapping/simultaneous ticks with Deduction).
-    #
-    # CHANGED 2026-08-30 (again, same day): shifted the 3 ticks off the round quarter-
-    # hours (:00/:15/:30) onto :07/:22/:37 — GitHub's own docs flag round hour/quarter
-    # minutes as the most congested for scheduled workflows, and off-beat minutes
-    # measurably reduce queueing delay. No plan upgrade needed for this.
-    # NOTE: tuned for CEST. Revisit in October when clocks go back to CET — until then
-    # this is fine.
-    #
-    # The script itself still decides whether it's actually ready to act — it checks
-    # that the Daily Stock Consumption Deduction job has already caught up on today's
-    # Daily Sales data before computing an order, and uses the Orders table (not GitHub
-    # run history) to avoid sending more than one email per day. If the last tick
-    # (05:37 UTC / 07:37 Madrid) still isn't ready, it sends a "missed" alert instead
-    # of staying silent.
-    - cron: '7,22,37 5 * * *'
+    # SAFETY NET, added 2026-09-01: workflow_run only fires if Deduction actually ran
+    # and completed. If Deduction never triggers at all on a given day (the documented
+    # GitHub Actions quirk we hit on 2026-08-28 — a schedule change caused the very next
+    # window to be silently skipped), there is no completion event for this workflow to
+    # hook onto, and it would otherwise stay silent too. This single late tick
+    # (07:00 UTC / 09:00-10:00 Madrid depending on CEST/CET) exists purely as a backstop:
+    # by then Deduction should certainly be done if it ran at all, and the script's own
+    # readiness + "missed" alert logic (see below) still applies, so this either sends a
+    # correct order or a proper alert — it never sends a silently-wrong one.
+    - cron: '0 7 * * *'
   workflow_dispatch:
     inputs:
       send_email:
         description: 'Actually send the email to the kitchen (leave off for silent testing)'
         type: boolean
         default: false
-
 jobs:
   send-order:
     runs-on: ubuntu-latest
+    # Only proceed if: manually triggered (workflow_dispatch), the safety-net schedule
+    # ticked, or the upstream Deduction workflow completed SUCCESSFULLY. A failed
+    # Deduction run must not lead to an order being computed off partial/unwritten data.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success'
     defaults:
       run:
         working-directory: ./production-kitchen-order
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Install dependencies
         run: npm install
-
       - name: Run T+1 order script
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
