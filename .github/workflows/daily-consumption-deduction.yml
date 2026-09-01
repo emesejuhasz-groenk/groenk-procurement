@@ -2,42 +2,21 @@ name: Daily Stock Consumption Deduction
 
 on:
   schedule:
-    # RE-TOUCHED 2026-08-31: the cron itself is unchanged from yesterday's edit — this
-    # comment-only commit exists purely to force GitHub to re-register the schedule
-    # trigger. Confirmed via the Actions API that after yesterday's cron change, this
-    # workflow had ZERO scheduled runs overnight (not late, not failed — never
-    # triggered at all). This is a documented GitHub Actions quirk: right after a cron
-    # change, the very next scheduled window can get silently skipped while GitHub
-    # re-registers it internally; a small commit to the workflow file is the standard
-    # workaround.
-    # CHANGED 2026-08-30: moved much earlier. HiOPOS emails the nightly POS report at a
-    # fixed 02:00-02:30 Madrid time that Emese cannot change, so the whole chain now
-    # starts right after that instead of waiting until morning:
-    #   HiOPOS report          ~02:00-02:30 Madrid (fixed, external)
-    #   Cowork import (primary) 03:00 Madrid
-    #   Cowork import (backup)  03:30 Madrid
-    #   Deduction (this file)   03:45-04:30 Madrid  <- comfortable buffer after both imports
-    #   Production Kitchen Order 07:00-07:30 Madrid <- unchanged, huge slack now
+    # WIDENED 2026-09-01: the tight 03:52-04:37 Madrid window (added 2026-08-30) assumed
+    # GitHub Actions scheduled runs fire within minutes of their target time. In practice,
+    # actual runs during Aug 29 - Sep 1 landed 5-6 HOURS late (e.g. scheduled for ~04:00
+    # Madrid, actually ran 09:43, 10:35, 08:49, 09:44) - and on Aug 28, right after a cron
+    # edit, the scheduled trigger never fired at all (documented GitHub Actions quirk: the
+    # first window after a schedule change can be silently skipped while GitHub
+    # re-registers it). A 45-minute window is too narrow for delays of this size.
     #
-    # Runs every 15 min, 01:52-02:37 UTC = 03:52-04:37 Madrid (CEST, summer).
-    # CHANGED 2026-08-30 (again, same day): shifted off the round quarter-hours (:00,
-    # :15, :30, :45) onto :07/:22/:37/:52 instead. GitHub's own docs say scheduled
-    # workflows are most likely to be delayed "at the start of every hour" and general
-    # community data shows :00/:15/:30/:45 are the most congested minutes across all of
-    # GitHub Actions — off-beat minutes see measurably less queueing delay. Costs
-    # nothing, no plan upgrade needed.
+    # New window: every 15 min, 01:07-07:52 UTC = 03:07-09:52 Madrid (CEST, summer).
+    # Costs nothing extra: the script is idempotent (only ever processes Daily Sales
+    # records not yet marked "Stock Deducted"), so every tick before the day's sales
+    # are imported, or after they're already deducted, is simply a no-op.
     # NOTE: tuned for CEST. Revisit in October when clocks go back to CET (see the
-    # production-kitchen-order workflow for the same caveat) — until then this is fine.
-    # Safe to run this often: the script is idempotent (only ever processes Daily Sales
-    # records not yet marked "Stock Deducted"), so early ticks before the day's sales
-    # have been imported are simply no-ops.
-    #
-    # If, by the LAST tick (02:37 UTC / 04:37 Madrid), any restaurant still has no Daily
-    # Sales at all for yesterday's date, the script sends a "missed" alert instead of
-    # staying silent — mirrors the same pattern already used in the Production Kitchen
-    # Order workflow.
-    - cron: '52 1 * * *'
-    - cron: '7,22,37 2 * * *'
+    # production-kitchen-order workflow for the same caveat) - until then this is fine.
+    - cron: '7,22,37,52 1-7 * * *'
   workflow_dispatch: {}
 
 jobs:
