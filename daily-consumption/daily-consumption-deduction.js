@@ -85,6 +85,9 @@ const RESTAURANT_LOCATION_IDS = {
   'Fornalutx': 'recyfcAwYYZgFzSyd',
   'Sóller Pizza': 'reckUG4DXrJTMYtte',
 };
+const LOCATION_NAME_BY_ID = Object.fromEntries(
+  Object.entries(RESTAURANT_LOCATION_IDS).map(([name, id]) => [id, name])
+);
 
 // ---------- Airtable helpers ----------
 
@@ -254,6 +257,7 @@ async function main() {
   const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
   const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
   const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
+  const productNameById = Object.fromEntries(products.map(p => [p.id, p.fields['Name'] || p.id]));
 
   const bomByMenuItem = {};
   for (const r of recipes) {
@@ -352,6 +356,51 @@ async function main() {
       }
       running = ledgerEffect(rec['Type'], rec['Quantity']) + running;
       rec['Stock Status After Transaction'] = String(Math.round(running * 1000) / 1000);
+    }
+  }
+
+  // ---------- Negative stock alert ----------
+  // ADDED 2026-09-02: real food stock should never legitimately go negative — a negative
+  // computed balance always means the ledger has drifted from physical reality (a missed
+  // physical count, an unconfirmed delivery, unlogged waste, a stale BOM, etc.), exactly
+  // the kind of thing that got manually hunted down and fixed repeatedly on 2026-09-01/02.
+  // Rather than silently deducting into negative numbers and only finding out days later
+  // when an order comes out wildly wrong, flag it the same morning it happens. This does
+  // NOT block or alter the deduction itself — the sale still really happened and still
+  // needs to be recorded — it only adds visibility on top.
+  const negativeStockAlerts = [];
+  for (const [key, recs] of Object.entries(byProductLocation)) {
+    const last = recs[recs.length - 1];
+    const finalBalance = Number(last['Stock Status After Transaction']);
+    if (finalBalance < 0) {
+      const [productId, locationId] = key.split('|');
+      negativeStockAlerts.push({
+        product: productNameById[productId] || productId,
+        location: LOCATION_NAME_BY_ID[locationId] || locationId,
+        balance: finalBalance,
+      });
+    }
+  }
+  if (negativeStockAlerts.length) {
+    negativeStockAlerts.sort((a, b) => a.balance - b.balance);
+    console.log(`⚠ ${negativeStockAlerts.length} product/location combination(s) went negative today (real stock is actually 0, the negative number just measures the drift):`);
+    for (const a of negativeStockAlerts) console.log(`  - ${a.product} @ ${a.location}: ledger says ${a.balance}, real stock is 0`);
+    try {
+      await sendResendEmail({
+        subject: `⚠️ Negative stock detected (${negativeStockAlerts.length} item${negativeStockAlerts.length === 1 ? '' : 's'})`,
+        text:
+          `Today's consumption deduction pushed the following product/location balances below zero. ` +
+          `Physical stock can never actually be negative — the real stock for each of these is 0 right now. ` +
+          `The negative number below is just a measure of how far the ledger has drifted from reality (a ` +
+          `delivery that was received but never confirmed, an out-of-date physical count, unlogged waste, etc.) ` +
+          `— the more negative, the bigger the gap.\n\n` +
+          negativeStockAlerts.map(a => `${a.product} @ ${a.location}: ledger says ${a.balance} (real stock: 0)`).join('\n') +
+          `\n\nRecommended fix: do a quick physical count of these items and enter it as a "Manual count" ` +
+          `adjustment in Airtable (or via the app) — that resets the ledger to reality and clears the negative ` +
+          `balance for future runs.`,
+      });
+    } catch (e) {
+      console.log(`Negative-stock alert email also failed to send: ${e.message}`);
     }
   }
 
