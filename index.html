@@ -668,25 +668,46 @@ function NewOrderScreen({ user, api }) {
         </div>
       ) : (
         <div>
-          {filteredProducts.map(p => {
-            const isSuggested = suggested[p.id] !== undefined && quantities[p.id] === String(suggested[p.id]);
-            return (
-            <div key={p.id} className="product-row">
-              <div>
-                <div className="product-name">{p.fields['Name']}</div>
-                <div className="product-unit">
-                  {p.fields['Unit']}
-                  {isSuggested && <span style={{ marginLeft: 6, color: 'var(--petrol)', fontWeight: 700 }}>· suggested</span>}
-                </div>
+          {/* CHANGED 2026-09-02: grouped by each Product's "Order Category" (Meat & Fish,
+              Sauce, Bakery/pastry/dessert, Extra topping, Drink, Other), same CATEGORY_ORDER
+              and grouping logic already used in InventoryScreen and PrepScreen — this screen
+              was the one place still showing a flat, uncategorized list. Falls back to a
+              single flat list if none of this supplier's products have a category set. */}
+          {(() => {
+            const hasCategories = filteredProducts.some(p => p.fields['Order Category']);
+            const byName = (a, b) => (a.fields['Name'] || '').trim().localeCompare((b.fields['Name'] || '').trim());
+            const groups = hasCategories
+              ? CATEGORY_ORDER.map(cat => ({ cat, items: filteredProducts.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byName) })).filter(g => g.items.length)
+              : [{ cat: null, items: [...filteredProducts].sort(byName) }];
+            return groups.map(g => (
+              <div key={g.cat || 'all'}>
+                {g.cat && (
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '10px 0 4px' }}>
+                    {g.cat}
+                  </div>
+                )}
+                {g.items.map(p => {
+                  const isSuggested = suggested[p.id] !== undefined && quantities[p.id] === String(suggested[p.id]);
+                  return (
+                    <div key={p.id} className="product-row">
+                      <div>
+                        <div className="product-name">{p.fields['Name']}</div>
+                        <div className="product-unit">
+                          {p.fields['Unit']}
+                          {isSuggested && <span style={{ marginLeft: 6, color: 'var(--petrol)', fontWeight: 700 }}>· suggested</span>}
+                        </div>
+                      </div>
+                      <div className="qty-controls">
+                        <button className="qty-btn" onClick={() => bump(p.id, -1)}><i className="ti ti-minus" style={{ fontSize: 14 }}></i></button>
+                        <input type="text" inputMode="numeric" placeholder="0" value={quantities[p.id] || ''} onChange={e => setQuantities(q => ({ ...q, [p.id]: e.target.value.replace(',', '.') }))} className="qty-input" />
+                        <button className="qty-btn" onClick={() => bump(p.id, 1)}><i className="ti ti-plus" style={{ fontSize: 14 }}></i></button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="qty-controls">
-                <button className="qty-btn" onClick={() => bump(p.id, -1)}><i className="ti ti-minus" style={{ fontSize: 14 }}></i></button>
-                <input type="text" inputMode="numeric" placeholder="0" value={quantities[p.id] || ''} onChange={e => setQuantities(q => ({ ...q, [p.id]: e.target.value.replace(',', '.') }))} className="qty-input" />
-                <button className="qty-btn" onClick={() => bump(p.id, 1)}><i className="ti ti-plus" style={{ fontSize: 14 }}></i></button>
-              </div>
-            </div>
-            );
-          })}
+            ));
+          })()}
         </div>
       )}
 
