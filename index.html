@@ -819,7 +819,21 @@ function PendingOrdersScreen({ user, api }) {
               {oItems.length === 0 && !(newLines[o.id] || []).length ? <span style={{ color: 'var(--text-muted)' }}>No items</span> :
                 oItems.map((it, i) => {
                   const prod = products.find(p => (it.fields['Product'] || []).includes(p.id));
-                  const currentVal = edits[it.id] !== undefined ? edits[it.id] : it.fields['Quantity'];
+                  // CHANGED 2026-09-02: once an item has actually been received, show
+                  // its real "Received Qty" here instead of the original "Quantity" —
+                  // previously this always showed the as-ordered number forever, even
+                  // after receiving corrected it (e.g. ordered 44, actually got 63),
+                  // which looked like the order was permanently "stuck" on the wrong
+                  // number and caused real confusion about whether the correction had
+                  // taken effect. The stock ledger itself was always correct (it's
+                  // written from Received Qty at receiving time) — this was a display-
+                  // only bug. The original ordered quantity is now shown alongside as a
+                  // small note when it differs, for reference.
+                  const wasReceived = !!it.fields['Received'];
+                  const receivedQtyVal = it.fields['Received Qty'];
+                  const displayBase = (wasReceived && receivedQtyVal !== undefined && receivedQtyVal !== '') ? receivedQtyVal : it.fields['Quantity'];
+                  const currentVal = edits[it.id] !== undefined ? edits[it.id] : displayBase;
+                  const differsFromOrdered = wasReceived && receivedQtyVal !== undefined && receivedQtyVal !== '' && Number(receivedQtyVal) !== Number(it.fields['Quantity']);
                   return (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                       <input
@@ -829,6 +843,7 @@ function PendingOrdersScreen({ user, api }) {
                         style={{ width: 70, fontSize: 13, padding: '3px 6px', minHeight: 28 }}
                       />
                       <span>× {prod?.fields['Name'] || '...'}</span>
+                      {differsFromOrdered && <span style={{ fontSize: 11, color: 'var(--text-warning)' }}>(ordered {it.fields['Quantity']})</span>}
                     </div>
                   );
                 })}
@@ -1053,16 +1068,32 @@ function InvoiceScreen({ api }) {
   async function closeOrder() {
     setSaving(true);
     try {
-      for (const item of items) {
+      // CHANGED 2026-09-02: previously updated each Order Item one at a time in a
+      // sequential loop, then updated the Order's own Status as a separate, final
+      // request. With 15-18 items that's a long chain of individual network calls —
+      // every item update can succeed while the single LAST call (the Order's Status
+      // -> "Closed") hits a transient hiccup, leaving the order stuck on "Delivered"
+      // with no clear indication of what actually failed (confirmed to have happened
+      // for a real order on 2026-09-02: every item was correctly saved, but the order
+      // itself never flipped to Closed, so it kept showing stale ordered-quantities in
+      // Open Orders). Fixed by (1) running the item updates in parallel instead of one
+      // by one, shrinking the failure window, and (2) retrying the Status update once,
+      // since that single write is what actually makes the order disappear from Open
+      // Orders / Pending Orders.
+      await Promise.all(items.map(item => {
         const fields = { 'Invoice Match': matches[item.id] || 'Pending Review' };
         const rq = receivedQty[item.id];
         if (rq !== undefined && rq !== '') fields['Received Qty'] = Number(rq);
-        await api.update('Order Items', item.id, fields);
+        return api.update('Order Items', item.id, fields);
+      }));
+      try {
+        await api.update('Orders', order.id, { 'Status': 'Closed' });
+      } catch (e) {
+        await api.update('Orders', order.id, { 'Status': 'Closed' }); // one retry — this is the write that actually closes the order
       }
-      await api.update('Orders', order.id, { 'Status': 'Closed' });
       setOrders(o => o.filter(x => x.id !== order.id));
       setSelected(null); setMatches({}); setReceivedQty({});
-    } catch(e) { alert('Error: ' + e.message); }
+    } catch(e) { alert('Could not close the order — please try again. (' + e.message + ')'); }
     finally { setSaving(false); }
   }
 
