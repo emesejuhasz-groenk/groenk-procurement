@@ -1,8 +1,4 @@
 
-
-
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1568,6 +1564,13 @@ function InfoScreen() {
 // The Daily Stock Consumption Deduction job still needs to run each morning (this
 // screen's "current stock" numbers depend on it), so that dependency remains — but
 // it's now the only one left, down from three (Deduction + PK order script + email).
+//
+// UPDATED 2026-09-02: products are now grouped by "Order Category" (Meat & Fish,
+// Sauce, Bakery/pastry/dessert, Extra topping, Drink, Other) — same CATEGORY_ORDER
+// and grouping logic already used in InventoryScreen — instead of one flat
+// alphabetical list. Requested by Emese so restaurant staff can scan the prep list
+// the same way they already scan Inventory, rather than hunting for items in a
+// single long A-Z list.
 const RESTAURANT_ORDER = ['Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Soller - Groenk Pizza'];
 
 function PrepScreen({ user, api }) {
@@ -1706,7 +1709,17 @@ function PrepScreen({ user, api }) {
   const productIdsForRestaurant = [...new Set([
     ...Object.keys(suggestions[activeRestaurant] || {}),
     ...(existingOrderFor(activeRestaurant) ? existingOrderItems.filter(oi => (oi.fields['Order'] || []).includes(existingOrderFor(activeRestaurant).id)).map(oi => (oi.fields['Product'] || [])[0]) : []),
-  ])].filter(Boolean).sort((a, b) => (productById[a]?.['Name'] || '').localeCompare(productById[b]?.['Name'] || ''));
+  ])].filter(Boolean);
+
+  // Group the same way InventoryScreen does: by each Product's "Order Category"
+  // field, in CATEGORY_ORDER, falling back to a single flat A-Z list if none of
+  // today's products have a category set at all.
+  const restaurantProducts = productIdsForRestaurant.map(id => ({ id, fields: productById[id] || {} }));
+  const hasCategories = restaurantProducts.some(p => p.fields['Order Category']);
+  const byName = (a, b) => (a.fields['Name'] || '').trim().localeCompare((b.fields['Name'] || '').trim());
+  const groupedProducts = hasCategories
+    ? CATEGORY_ORDER.map(cat => ({ cat, items: restaurantProducts.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byName) })).filter(g => g.items.length)
+    : [{ cat: null, items: [...restaurantProducts].sort(byName) }];
 
   const alreadySentToday = !!existingOrderFor(activeRestaurant) && existingOrderFor(activeRestaurant).fields['Status'] !== 'Pending';
 
@@ -1732,32 +1745,40 @@ function PrepScreen({ user, api }) {
         </div>
       ) : (
         <div>
-          {productIdsForRestaurant.map(productId => {
-            const key = `${activeRestaurant}|${productId}`;
-            const p = productById[productId] || {};
-            const suggested = suggestions[activeRestaurant]?.[productId];
-            const isChecked = !!checkedOff[key];
-            return (
-              <div key={productId} className="product-row" style={isChecked ? { opacity: 0.5 } : {}}>
-                <button className="qty-btn" style={{ background: isChecked ? 'var(--petrol)' : '#fff', borderColor: 'var(--border-strong)', flexShrink: 0 }}
-                  onClick={() => setCheckedOff(c => ({ ...c, [key]: !c[key] }))}>
-                  {isChecked && <i className="ti ti-check" style={{ fontSize: 16, color: '#fff' }}></i>}
-                </button>
-                <div style={{ flex: 1 }}>
-                  <div className="product-name">{p['Name']}</div>
-                  <div className="product-unit">
-                    {p['Unit']}
-                    {suggested !== undefined && <span style={{ marginLeft: 6, color: 'var(--petrol)', fontWeight: 700 }}>· suggested {suggested}</span>}
+          {groupedProducts.map(g => (
+            <div key={g.cat || 'all'}>
+              {g.cat && (
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '10px 0 4px' }}>
+                  {g.cat}
+                </div>
+              )}
+              {g.items.map(({ id: productId, fields: p }) => {
+                const key = `${activeRestaurant}|${productId}`;
+                const suggested = suggestions[activeRestaurant]?.[productId];
+                const isChecked = !!checkedOff[key];
+                return (
+                  <div key={productId} className="product-row" style={isChecked ? { opacity: 0.5 } : {}}>
+                    <button className="qty-btn" style={{ background: isChecked ? 'var(--petrol)' : '#fff', borderColor: 'var(--border-strong)', flexShrink: 0 }}
+                      onClick={() => setCheckedOff(c => ({ ...c, [key]: !c[key] }))}>
+                      {isChecked && <i className="ti ti-check" style={{ fontSize: 16, color: '#fff' }}></i>}
+                    </button>
+                    <div style={{ flex: 1 }}>
+                      <div className="product-name">{p['Name']}</div>
+                      <div className="product-unit">
+                        {p['Unit']}
+                        {suggested !== undefined && <span style={{ marginLeft: 6, color: 'var(--petrol)', fontWeight: 700 }}>· suggested {suggested}</span>}
+                      </div>
+                    </div>
+                    <div className="qty-controls">
+                      <input type="text" inputMode="numeric" placeholder="0" value={qtyFor(activeRestaurant, productId)}
+                        onChange={e => setEditedQtys(q => ({ ...q, [key]: e.target.value.replace(',', '.') }))}
+                        className="qty-input" style={{ width: 56 }} />
+                    </div>
                   </div>
-                </div>
-                <div className="qty-controls">
-                  <input type="text" inputMode="numeric" placeholder="0" value={qtyFor(activeRestaurant, productId)}
-                    onChange={e => setEditedQtys(q => ({ ...q, [key]: e.target.value.replace(',', '.') }))}
-                    className="qty-input" style={{ width: 56 }} />
-                </div>
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
 
