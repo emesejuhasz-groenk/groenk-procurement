@@ -1445,14 +1445,27 @@ function WasteScreen({ user, api }) {
     if (!productId || !qty || Number(qty) <= 0) return;
     setSaving(true);
     try {
+      // CHANGED 2026-09-03: previously this always wrote the typed number straight
+      // into the ledger as-is, in the product's own STOCKING unit — fine for most
+      // products, but wrong for anything on the INVENTORY_COUNT_OVERRIDE list
+      // (Cheesecake/Carrot Cake counted in slices, bottled wines/spirits counted in
+      // bottles, while the product itself is stocked as a whole cake or a box/caja).
+      // Staff naturally think and type in the unit they can see and count (1 slice,
+      // 1 bottle), and until now that got written as 1 WHOLE stock unit instead — an
+      // 8x overstatement for a cake slice, or a 6-24x overstatement for a single
+      // broken bottle. Found via a real cheesecake-slice waste entry on 2026-09-03.
+      // Now converts the same way InventoryScreen's saveCount already does.
+      const override = INVENTORY_COUNT_OVERRIDE[productId];
+      const enteredQty = Number(qty);
+      const stockQty = override ? enteredQty / override.countsPerStockUnit : enteredQty;
       await api.create('Inventory Transactions', {
         'Date': new Date().toISOString().slice(0,10),
         'Type': 'Waste',
-        'Quantity': Number(qty),
+        'Quantity': stockQty,
         'Related Product': [productId],
         'Location': [LOCATION_IDS[user.restaurant]],
         'Waste Reason': reason,
-        'Notes': notes,
+        'Notes': override ? `${notes ? notes + ' — ' : ''}${enteredQty} ${override.countUnit}`.trim() : notes,
         'Transaction Added By': user.name,
       });
       setQty(''); setNotes(''); setReason(WASTE_REASONS[0]);
@@ -1472,12 +1485,12 @@ function WasteScreen({ user, api }) {
             if (!ps.length) return null;
             return (
               <optgroup key={s.id} label={s.fields['Name']}>
-                {ps.map(p => <option key={p.id} value={p.id}>{p.fields['Name']} ({p.fields['Unit']})</option>)}
+                {ps.map(p => <option key={p.id} value={p.id}>{p.fields['Name']} ({INVENTORY_COUNT_OVERRIDE[p.id] ? INVENTORY_COUNT_OVERRIDE[p.id].countUnit : p.fields['Unit']})</option>)}
               </optgroup>
             );
           })}
         </select>
-        <div className="section-label">Quantity wasted</div>
+        <div className="section-label">Quantity wasted{INVENTORY_COUNT_OVERRIDE[productId] ? ` (in ${INVENTORY_COUNT_OVERRIDE[productId].countUnit})` : ''}</div>
         <input type="text" inputMode="decimal" placeholder="0" value={qty} onChange={e => setQty(e.target.value.replace(',', '.'))} style={{ marginBottom: 12 }} />
         <div className="section-label">Reason</div>
         <select value={reason} onChange={e => setReason(e.target.value)} style={{ marginBottom: 12 }}>
@@ -1495,9 +1508,13 @@ function WasteScreen({ user, api }) {
           <div className="section-label" style={{ marginBottom: 8 }}>Recent waste at {user.restaurant}</div>
           {recent.map(t => {
             const prod = products.find(p => (t.fields['Related Product'] || []).includes(p.id));
+            const productId = (t.fields['Related Product'] || [])[0];
+            const override = INVENTORY_COUNT_OVERRIDE[productId];
+            const displayQty = override ? Math.round(Number(t.fields['Quantity']) * override.countsPerStockUnit * 100) / 100 : t.fields['Quantity'];
+            const displayUnit = override ? override.countUnit : '';
             return (
               <div key={t.id} className="card card-muted" style={{ padding: '10px 14px', marginBottom: 6 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--petrol)' }}>{t.fields['Quantity']} × {prod?.fields['Name'] || '...'}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--petrol)' }}>{displayQty}{displayUnit ? ` ${displayUnit}` : ''} × {prod?.fields['Name'] || '...'}</div>
                 <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.fields['Date']} · {t.fields['Waste Reason']}{t.fields['Notes'] ? ` · ${t.fields['Notes']}` : ''}</div>
               </div>
             );
