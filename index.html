@@ -1625,18 +1625,35 @@ function InfoScreen() {
 // single long A-Z list.
 const RESTAURANT_ORDER = ['Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Soller - Groenk Pizza'];
 
-// ---------- Delivery schedule ----------
-// CHANGED 2026-09-03: Production Kitchen no longer delivers on Mondays (Emese
-// confirmed this is effective immediately). On a Monday this screen simply
-// shows "nothing needed" for every restaurant — there's genuinely no delivery
-// to prep for, so no suggestions are computed and Confirm & Send has nothing
-// to do. STILL T+0 for now (order today for today's own delivery) — switching
-// to real T+1 is a deliberately separate, carefully-timed future change (see
-// production-kitchen-order.js's header comment for why an arbitrary-evening
-// flip would skip a day's delivery); this screen must keep matching that
-// script's behavior exactly, so it stays T+0 until that switch happens there too.
+// ---------- Delivery schedule & the T+0 -> T+1 transition ----------
+// Must match production-kitchen-order.js exactly — see that file's header
+// comment for the full reasoning. Production Kitchen no longer delivers on
+// Mondays (effective 2026-09-03). T+0 stays in place through 2026-09-06, and
+// permanent T+1 (order today for tomorrow) takes effect starting Monday
+// 2026-09-07 — the one day of the week that never needs an order anyway, so
+// switching there skips nothing. From that date on, a Sunday run's target
+// (which would land on Monday) is pushed to Tuesday with daysToCover = 2.
+const T_PLUS_1_GO_LIVE_DATE = '2026-09-07';
+
 function isMonday(date) {
   return date.getDay() === 1; // 0=Sun, 1=Mon, ... 6=Sat
+}
+
+// Returns null if there's nothing to prep today (still-T+0 mode, and today is
+// a Monday with no delivery). Otherwise { targetDate, daysToCover }.
+function computeTarget(today) {
+  if (today.toISOString().slice(0, 10) < T_PLUS_1_GO_LIVE_DATE) {
+    if (isMonday(today)) return null;
+    return { targetDate: today, daysToCover: 1 };
+  }
+  let targetDate = new Date(today);
+  targetDate.setDate(targetDate.getDate() + 1);
+  let daysToCover = 1;
+  if (isMonday(targetDate)) {
+    targetDate.setDate(targetDate.getDate() + 1);
+    daysToCover = 2;
+  }
+  return { targetDate, daysToCover };
 }
 
 function PrepScreen({ user, api }) {
@@ -1688,8 +1705,9 @@ function PrepScreen({ user, api }) {
     }
 
     const out = {};
-    // No delivery on Mondays — nothing to suggest for any restaurant that day.
-    if (isMonday(new Date())) return out;
+    const targetInfo = computeTarget(new Date());
+    if (!targetInfo) return out; // still-T+0 mode and today is Monday — no delivery
+    const { daysToCover } = targetInfo;
     for (const restaurantName of RESTAURANT_ORDER) {
       const locationId = LOCATION_IDS[restaurantName];
       const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
@@ -1715,7 +1733,7 @@ function PrepScreen({ user, api }) {
       }
       const restaurantResult = {};
       for (const [productId, avg] of Object.entries(avgConsumption)) {
-        const par = avg * ORDER_SUGGESTION_BUFFER;
+        const par = avg * daysToCover * ORDER_SUGGESTION_BUFFER;
         const stock = computeCurrentStock(invTxns, productId, locationId);
         const qty = Math.max(0, Math.ceil(par - stock));
         if (qty > 0) restaurantResult[productId] = qty;
@@ -1726,8 +1744,11 @@ function PrepScreen({ user, api }) {
   }, [loading, products, recipes, dailySales, invTxns]);
 
   const today = new Date().toISOString().slice(0, 10);
+  const targetInfo = computeTarget(new Date());
+  const targetDateStr = targetInfo ? targetInfo.targetDate.toISOString().slice(0, 10) : null;
   function existingOrderFor(restaurantName) {
-    return existingOrders.find(o => (o.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID) && o.fields['Restaurant'] === restaurantName && (o.fields['Order Date'] || '').slice(0, 10) === today);
+    if (!targetDateStr) return null;
+    return existingOrders.find(o => (o.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID) && o.fields['Restaurant'] === restaurantName && (o.fields['Order Date'] || '').slice(0, 10) === targetDateStr);
   }
   function existingItemFor(restaurantName, productId) {
     const order = existingOrderFor(restaurantName);
@@ -1753,7 +1774,7 @@ function PrepScreen({ user, api }) {
 
       let order = existingOrderFor(restaurantName);
       if (!order) {
-        order = await api.create('Orders', { 'Order Date': today, 'Supplier': [PRODUCTION_KITCHEN_SUPPLIER_ID], 'Restaurant': restaurantName, 'Status': 'Ordered', 'Created By': user.name });
+        order = await api.create('Orders', { 'Order Date': targetDateStr, 'Supplier': [PRODUCTION_KITCHEN_SUPPLIER_ID], 'Restaurant': restaurantName, 'Status': 'Ordered', 'Created By': user.name });
       } else {
         await api.update('Orders', order.id, { 'Status': 'Ordered' });
       }
@@ -1794,7 +1815,7 @@ function PrepScreen({ user, api }) {
   return (
     <div className="content">
       <div style={{ marginBottom: '1.25rem' }}>
-        <div className="section-label">Today's prep — {today}{isMonday(new Date()) ? ' · no Production Kitchen delivery today (Monday)' : ''}</div>
+        <div className="section-label">Today's prep — {today}{targetDateStr ? ` · for delivery ${targetDateStr}${targetInfo.daysToCover === 2 ? ' (covers 2 days — Monday has no delivery)' : ''}` : ' · no Production Kitchen delivery today (Monday)'}</div>
         <div className="nav-scroll" style={{ marginTop: 8 }}>
           {RESTAURANT_ORDER.map(r => (
             <button key={r} className={`nav-btn ${activeRestaurant === r ? 'active' : ''}`}
