@@ -1625,6 +1625,20 @@ function InfoScreen() {
 // single long A-Z list.
 const RESTAURANT_ORDER = ['Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Soller - Groenk Pizza'];
 
+// ---------- Delivery schedule ----------
+// CHANGED 2026-09-03: Production Kitchen no longer delivers on Mondays (Emese
+// confirmed this is effective immediately). On a Monday this screen simply
+// shows "nothing needed" for every restaurant — there's genuinely no delivery
+// to prep for, so no suggestions are computed and Confirm & Send has nothing
+// to do. STILL T+0 for now (order today for today's own delivery) — switching
+// to real T+1 is a deliberately separate, carefully-timed future change (see
+// production-kitchen-order.js's header comment for why an arbitrary-evening
+// flip would skip a day's delivery); this screen must keep matching that
+// script's behavior exactly, so it stays T+0 until that switch happens there too.
+function isMonday(date) {
+  return date.getDay() === 1; // 0=Sun, 1=Mon, ... 6=Sat
+}
+
 function PrepScreen({ user, api }) {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState([]);
@@ -1674,6 +1688,8 @@ function PrepScreen({ user, api }) {
     }
 
     const out = {};
+    // No delivery on Mondays — nothing to suggest for any restaurant that day.
+    if (isMonday(new Date())) return out;
     for (const restaurantName of RESTAURANT_ORDER) {
       const locationId = LOCATION_IDS[restaurantName];
       const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
@@ -1778,7 +1794,7 @@ function PrepScreen({ user, api }) {
   return (
     <div className="content">
       <div style={{ marginBottom: '1.25rem' }}>
-        <div className="section-label">Today's prep — {today}</div>
+        <div className="section-label">Today's prep — {today}{isMonday(new Date()) ? ' · no Production Kitchen delivery today (Monday)' : ''}</div>
         <div className="nav-scroll" style={{ marginTop: 8 }}>
           {RESTAURANT_ORDER.map(r => (
             <button key={r} className={`nav-btn ${activeRestaurant === r ? 'active' : ''}`}
