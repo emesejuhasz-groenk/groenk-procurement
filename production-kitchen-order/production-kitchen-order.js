@@ -24,16 +24,33 @@
  *                   the same BOM — so "current stock" here already reflects
  *                   yesterday's sales, not just receiving/waste/manual counts.
  *
- * Target date = run date + TARGET_DAY_OFFSET days (see constant below).
- * NORMALLY this is T+1 (order today for tomorrow's delivery), but it is
- * TEMPORARILY set to T+0 (order today for TODAY's delivery) starting
- * 2026-08-27, while stock / auto-order / receiving get back in sync after
- * a double-booking incident. Revert TARGET_DAY_OFFSET to 1 once things
- * have settled — nothing else in this file needs to change to switch back.
+ * ---------- Delivery schedule ----------
+ * CHANGED 2026-09-03: Production Kitchen no longer delivers on Mondays —
+ * reverted from the "every day of the week" rule set on 2026-08-29 (Emese
+ * confirmed 2026-09-03 this is effective immediately). On a Monday, this
+ * script does nothing at all: no order is computed, no email is sent, no
+ * "missed" alert fires — there's genuinely nothing to order for a day with no
+ * delivery, this isn't a failure state.
  *
- * Production Kitchen now delivers every day of the week (confirmed
- * 2026-08-29 — this replaces the earlier Tuesday–Sunday / no-Monday rule).
- * daysToCover is therefore always 1.
+ * STILL T+0 for now (TARGET_DAY_OFFSET = 0, unchanged since 2026-08-27): this
+ * script orders TODAY for TODAY's own delivery. Switching to real T+1 (order
+ * today for tomorrow) is a separate, deliberately deferred change — flipping
+ * it on an arbitrary evening would skip an entire day's delivery, because
+ * tomorrow morning's run would then target the day AFTER tomorrow instead of
+ * tomorrow itself, and nothing would have ordered for tomorrow under the old
+ * T+0 rule either (that already happened, or didn't, under the code as it
+ * was this morning). That transition needs its own careful one-time handling
+ * and will be done as a separate step once this Monday-skip has settled in.
+ *
+ * Production Kitchen delivery days: Tuesday-Sunday (6 days/week).
+ *
+ * TEMPORARY (since 2026-08-27, while stock/auto-order/receiving got back in
+ * sync after a double-booking incident): order for TODAY (T) instead of
+ * tomorrow (T+1). Revert TARGET_DAY_OFFSET to 1 once things have settled —
+ * see the note above for why that revert needs care, not just flipping the
+ * constant.
+ * NOTE: this shifts EVERY downstream date calculation (target date, weekday)
+ * by the same amount — no other code changes needed elsewhere in this file.
  *
  * Output:
  *   1. Creates an Order + Order Items record per restaurant in Airtable
@@ -61,7 +78,7 @@ const EMAIL_TO = 'productionkitchengroenk@gmail.com';
 const EMAIL_FROM = 'onboarding@resend.dev'; // Resend's shared sandbox sender — works with no domain setup as long as EMAIL_TO matches the Resend account's own signup address
 
 // ---------- Trigger classification ----------
-// CHANGED 2026-09-01: this workflow now has THREE possible triggers (see .yml):
+// This workflow has THREE possible triggers (see .yml):
 //   - workflow_run   — fired automatically right after Daily Stock Consumption
 //                       Deduction completes successfully. This is now the PRIMARY path.
 //   - schedule       — a single once-a-day safety-net tick (09:00-10:00 Madrid), only
@@ -69,10 +86,7 @@ const EMAIL_FROM = 'onboarding@resend.dev'; // Resend's shared sandbox sender �
 //   - workflow_dispatch — manual "Run workflow" click, for testing/backfilling.
 // Both workflow_run and schedule represent genuine, unattended, trustworthy runs that
 // should behave identically (readiness check applies, email auto-sends, dedup applies)
-// — only workflow_dispatch is the "manual test, stay silent by default" path. Every
-// place in this file that used to check GITHUB_EVENT_NAME === 'schedule' now checks
-// IS_AUTOMATED_RUN instead, so the switch to workflow_run as primary trigger doesn't
-// silently disable the readiness check or the automatic email send.
+// — only workflow_dispatch is the "manual test, stay silent by default" path.
 const GITHUB_EVENT_NAME = process.env.GITHUB_EVENT_NAME || '';
 const IS_AUTOMATED_RUN = GITHUB_EVENT_NAME === 'schedule' || GITHUB_EVENT_NAME === 'workflow_run';
 const SEND_EMAIL_OVERRIDE = process.env.SEND_EMAIL_OVERRIDE === 'true';
@@ -84,18 +98,6 @@ function madridHour(date) {
     10
   );
 }
-
-// ---------- Missed-window alert ----------
-// CHANGED 2026-09-01: this used to poll on a multi-tick schedule (every 15 min,
-// 05:00-05:30 UTC), waiting for Deduction to catch up, and only alerted from the LAST
-// tick of that window. That window no longer exists — this workflow is now triggered
-// directly by Deduction's completion (workflow_run), plus a single once-a-day
-// safety-net schedule tick. Neither path gets multiple attempts in a morning anymore,
-// so there's no more "wait for a later tick" to fall back on: every automated run IS
-// the only shot for that day. If the readiness check below still isn't satisfied on
-// an automated run, that's worth flagging immediately — workflow_run only fires after
-// Deduction reports success, so seeing un-deducted data at that point is unusual and
-// should surface right away, not get held back waiting for a tick that won't come.
 
 async function sendResendEmail({ subject, text }) {
   const res = await fetch('https://api.resend.com/emails', {
@@ -109,18 +111,8 @@ async function sendResendEmail({ subject, text }) {
   return result;
 }
 
-// Dedup for the email/Airtable-write step is still based on actual Airtable state (the
-// Orders table), not on run history — see the shouldSendEmail / alreadyOrdered check
-// near the bottom of main().
-
 const BUFFER_MULTIPLIER = 1.5;
-
-// TEMPORARY (a few weeks, starting 2026-08-27): order for TODAY (T) instead of
-// tomorrow (T+1), while stock / auto-order / receiving get back in sync after the
-// double-booking incident. Revert to 1 once things have settled.
-// NOTE: this shifts EVERY downstream date calculation (target date, weekday) by the
-// same amount — no other code changes needed elsewhere in this file.
-const TARGET_DAY_OFFSET = 0;
+const TARGET_DAY_OFFSET = 0; // T+0, still — see the delivery-schedule comment at the top of the file
 const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
 
 // Restaurant app-name -> Locations table record id (Retail-role records; see index.html for the
@@ -221,22 +213,29 @@ function addDays(date, n) {
   return d;
 }
 
+// See the big comment block at the top of the file for the full reasoning.
+// getDay(): 0=Sun, 1=Mon, 2=Tue, ... 6=Sat.
+function isMonday(date) {
+  return date.getDay() === 1;
+}
+
 // ---------- Main ----------
 
 async function main() {
   const today = new Date();
+
+  // Production Kitchen doesn't deliver on Mondays — nothing to order, nothing to
+  // send, this isn't a missed/failure state so no alert either. Just stop here.
+  if (isMonday(today)) {
+    console.log(`${isoDate(today)} is a Monday — Production Kitchen has no delivery today. Nothing to do.`);
+    return;
+  }
+
   const targetDate = addDays(today, TARGET_DAY_OFFSET);
   const targetDateStr = isoDate(targetDate);
-  const targetWeekday = targetDate.getDay(); // 0=Sun..6=Sat
+  const targetWeekday = targetDate.getDay();
+  const daysToCover = 1; // always 1 under T+0 — see delivery-schedule comment at top of file
   console.log(`Run date: ${isoDate(today)} — target (T+${TARGET_DAY_OFFSET}) date: ${targetDateStr} (weekday ${targetWeekday}), trigger: "${GITHUB_EVENT_NAME}"`);
-
-  // Production Kitchen now delivers every day of the week (confirmed 2026-08-29 — no
-  // more Monday exception, no more Sunday-covers-2-days special case). daysToCover is
-  // kept as a variable (rather than inlining "1" everywhere) so it's a single, obvious
-  // place to reintroduce a multi-day rule later if the delivery schedule ever changes
-  // again.
-  const daysToCover = 1;
-  console.log(`Days to cover: ${daysToCover}`);
 
   const [products, recipes, dailySales, invTxns, locations] = await Promise.all([
     airtableGetAll('Products'),
@@ -249,11 +248,11 @@ async function main() {
   // ---------- Wait for the daily consumption deduction to have caught up ----------
   // This script's "current stock" figure depends on the Daily Stock Consumption
   // Deduction job having already turned yesterday's Daily Sales into "Consumption"
-  // Inventory Transactions. As of 2026-09-01 this workflow is normally triggered
-  // directly by that job's own successful completion, so this check should almost
-  // always pass immediately — it remains as a real data-based safety check (not a
-  // fixed time assumption) rather than trusting the trigger alone, and it's what
-  // still protects the once-a-day schedule safety-net path, which has no such
+  // Inventory Transactions. This workflow is normally triggered directly by that
+  // job's own successful completion, so this check should almost always pass
+  // immediately — it remains as a real data-based safety check (not a fixed time
+  // assumption) rather than trusting the trigger alone, and it's what still
+  // protects the once-a-day schedule safety-net path, which has no such
   // guarantee. Manual runs skip this check so testing/backfilling is never blocked.
   if (IS_AUTOMATED_RUN) {
     const eligible = s => (s.fields['Menu Item'] || []).length && (s.fields['Location'] || []).length;
@@ -296,49 +295,36 @@ async function main() {
 
   // Group BOM rows by Menu Item, keeping only components that are Production-Kitchen products.
   // ---------- Unit conversion ----------
-  // Recipes (BOM) usually store per-portion quantities in small units (g, ml), while
-  // Products are stocked/ordered in bulk units (kg, l). Without this conversion, raw
-  // BOM numbers get summed as if they were already in the product's own order unit,
-  // producing wildly inflated results (e.g. grams treated as kilograms).
   const WEIGHT_TO_GRAMS = { g: 1, gr: 1, gramm: 1, kg: 1000 };
   const VOLUME_TO_ML = { ml: 1, cl: 10, dl: 100, l: 1000, liter: 1000, litre: 1000 };
 
-  // Products sold as individual bottles that get packed into boxes. bottleMl = size of
-  // one bottle in ml, boxBottles = bottles per box (mirrors Products."Pack Size", kept
-  // here explicitly since the script also needs the per-bottle ml, which isn't itself
-  // an Airtable field). Add new bottled drinks here as they come up.
   const BOTTLE_PRODUCTS = {
-    'rec0GG6FuoGVhppOX': { bottleMl: 750, boxBottles: 6 },  // Cruz De Alba Tinto Roble
-    'recr5eRYcQ9DjtF8N': { bottleMl: 750, boxBottles: 12 }, // K Naia Verdejo-Sauvig Blanc
-    'recNPOqxkKjbxruPm': { bottleMl: 750, boxBottles: 6 },  // Cava M.Manz.Paloma Minguez
-    'recfaXavJa7Mfn95b': { bottleMl: 750, boxBottles: 6 },  // Groenk La Isla Bonita Wine
-    'recOur09D12vya1TO': { bottleMl: 750, boxBottles: 6 },  // Paco&Lola Albarino Blanco
-    'recFkhzAQHnJQFOv6': { bottleMl: 750, boxBottles: 6 },  // Can Gelat White
-    'recqcp3W6BLYP7HLz': { bottleMl: 750, boxBottles: 6 },  // Mucho Más red wine
-    'recbmyjGTpXCAgRdf': { bottleMl: 750, boxBottles: 6 },  // Macia Batle 1856 Negre
-    'recvWB7SPBW8yCbyw': { bottleMl: 750, boxBottles: 6 },  // Can Gelat Gran Vi Red
-    'rectHW7Se1XBPFbF7': { bottleMl: 750, boxBottles: 6 },  // Obalo Rosado
-    'recuDpwaPhpDe5Qh0': { bottleMl: 750, boxBottles: 6 },  // Can Gelat Rosé
-    'rec5lgdtonSCCuXKn': { bottleMl: 750, boxBottles: 6 },  // Roda I Reserva
-    'recBZqhgUHiq9bP1d': { bottleMl: 500, boxBottles: 6 },  // Gin Groenk
-    'recYff3VN3LLhBP3R': { bottleMl: 700, boxBottles: 6 },  // Pampelle Aperitif
-    'recJVtCM5aKx3fkUs': { bottleMl: 700, boxBottles: 6 },  // Amargero
-    'recO3hYm1bTCEbHwE': { bottleMl: 750, boxBottles: 6 },  // André Clouet Brut Gran Reserva
-    'recLnrqeL5oKywzpO': { bottleMl: 750, boxBottles: 6 },  // Lanson champagne
-    'recrvnmrObLfFgOZO': { bottleMl: 200, boxBottles: 24 }, // Tónica Fever Tree 20cl C-24 (not PK-supplied today, kept for parity with index.html / daily-consumption-deduction.js)
-    'recLWTdCvXT0VPUoV': { bottleMl: 700, boxBottles: 12 }, // Taroncello (not PK-supplied today, kept for parity)
+    'rec0GG6FuoGVhppOX': { bottleMl: 750, boxBottles: 6 },
+    'recr5eRYcQ9DjtF8N': { bottleMl: 750, boxBottles: 12 },
+    'recNPOqxkKjbxruPm': { bottleMl: 750, boxBottles: 6 },
+    'recfaXavJa7Mfn95b': { bottleMl: 750, boxBottles: 6 },
+    'recOur09D12vya1TO': { bottleMl: 750, boxBottles: 6 },
+    'recFkhzAQHnJQFOv6': { bottleMl: 750, boxBottles: 6 },
+    'recqcp3W6BLYP7HLz': { bottleMl: 750, boxBottles: 6 },
+    'recbmyjGTpXCAgRdf': { bottleMl: 750, boxBottles: 6 },
+    'recvWB7SPBW8yCbyw': { bottleMl: 750, boxBottles: 6 },
+    'rectHW7Se1XBPFbF7': { bottleMl: 750, boxBottles: 6 },
+    'recuDpwaPhpDe5Qh0': { bottleMl: 750, boxBottles: 6 },
+    'rec5lgdtonSCCuXKn': { bottleMl: 750, boxBottles: 6 },
+    'recBZqhgUHiq9bP1d': { bottleMl: 500, boxBottles: 6 },
+    'recYff3VN3LLhBP3R': { bottleMl: 700, boxBottles: 6 },
+    'recJVtCM5aKx3fkUs': { bottleMl: 700, boxBottles: 6 },
+    'recO3hYm1bTCEbHwE': { bottleMl: 750, boxBottles: 6 },
+    'recLnrqeL5oKywzpO': { bottleMl: 750, boxBottles: 6 },
+    'recrvnmrObLfFgOZO': { bottleMl: 200, boxBottles: 24 },
+    'recLWTdCvXT0VPUoV': { bottleMl: 700, boxBottles: 12 },
   };
-  // Products sold from a bulk-liter box (no discrete "bottle" — syrups, bag-in-box). litersPerBox.
   const BULK_LITER_PRODUCTS = {
-    'recQuqcE97aPWh9gx': 3,  // Cordial Elderflower
-    'recQZGUy989QpkbZe': 3,  // Cordial Strawberry
-    'recJmkJvH3IRDwWrc': 3,  // Cordial Ginger
-    'recoPQdKRSxB8nKEt': 3,  // Cordial Mango
-    'recMaHap0Kptnyc8N': 10, // Vermouth Flors de Collserola
+    'recQuqcE97aPWh9gx': 3, 'recQZGUy989QpkbZe': 3, 'recJmkJvH3IRDwWrc': 3, 'recoPQdKRSxB8nKEt': 3,
+    'recMaHap0Kptnyc8N': 10,
   };
-  // Draught products, ordered by the keg. litersPerKeg.
   const KEG_PRODUCTS = {
-    'recg4kyyl1P4ionxe': 30, // EG Barril 30L
+    'recg4kyyl1P4ionxe': 30,
   };
 
   function convertQty(qty, fromUnit, toUnit, productId) {
@@ -357,7 +343,7 @@ async function main() {
 
     const litersPerBox = BULK_LITER_PRODUCTS[productId];
     if (litersPerBox && (t.includes('box') || t.includes('pack'))) {
-      const ml = VOLUME_TO_ML[f] ? qty * VOLUME_TO_ML[f] : qty * 1000; // assume liters if unit unrecognized
+      const ml = VOLUME_TO_ML[f] ? qty * VOLUME_TO_ML[f] : qty * 1000;
       return ml / 1000 / litersPerBox;
     }
 
@@ -366,25 +352,17 @@ async function main() {
       return (qty * VOLUME_TO_ML[f]) / 1000 / litersPerKeg;
     }
 
-    // Generic weight-based package conversion, read live from each Product's own
-    // "Weight per Unit (g)" field — e.g. Panko (10000 g/bag), Harina (1000 g/bag).
     const weightPerUnitG = Number(productWeightPerUnitById[productId]) || null;
     if (WEIGHT_TO_GRAMS[f] && weightPerUnitG) {
       return (qty * WEIGHT_TO_GRAMS[f]) / weightPerUnitG;
     }
 
-    // Generic count-based package conversion, read live from each Product's own "Pack
-    // Size" field — e.g. straws (100/pack), eggs (30/carton), carrots (25/tray).
     const startedAsWeightOrVolume = WEIGHT_TO_GRAMS[f] !== undefined || VOLUME_TO_ML[f] !== undefined;
     if (!startedAsWeightOrVolume) {
       const packSize = Number(productPackSizeById[productId]) || null;
       if (packSize) return qty / packSize;
     }
 
-    // Plain count-unit label mismatches ('unit' vs 'Pcs' vs 'db') safely pass through 1:1.
-    // But if we started from an actual weight/volume amount and found no confident path
-    // to the product's own order unit, don't silently pass the raw number through —
-    // signal "unreliable" so the caller can skip it instead of mis-ordering.
     return startedAsWeightOrVolume ? null : qty;
   }
   const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
@@ -406,21 +384,6 @@ async function main() {
   }
 
   // ---------- Current stock (physical-count-aware) ----------
-  // Fixed 2026-08-29: a plain chronological sum of every ledger row double-counts
-  // consumption whenever a physical count gets entered LATE (its own day's
-  // consumption not yet deducted at count time, then backfilled afterward). The
-  // physical count already reflects that consumption in the real world — so
-  // re-applying a backfilled row dated BEFORE the count subtracts it twice.
-  //
-  // The fix needs two different orderings for two different questions:
-  // 1) What was the count's delta CALIBRATED AGAINST? Whatever existed in Airtable
-  //    at the moment it was entered — i.e. sorted by createdTime (insertion order),
-  //    not by the ledger rows' own Date. history-by-insertion-order + the count's
-  //    own delta = the actual physical count value that was typed in.
-  // 2) Which LATER rows should still apply on top? Only ones whose real-world Date
-  //    is on/after the count's Date — a row inserted afterward (backfilled) but
-  //    dated BEFORE the count already happened before the shelf was counted, so is
-  //    already baked into that physical number and must be excluded, not re-summed.
   const ledgerEffect = (type, qty) => (type === 'Waste' || type === 'Consumption') ? -Math.abs(qty) : qty;
   const isManualCount = t => t.fields['Type'] === 'Manual Adjustment' && String(t.fields['Notes'] || '').toLowerCase().includes('manual count');
 
@@ -449,12 +412,6 @@ async function main() {
   // results[restaurantName][productId] = order quantity
   const results = {};
   for (const [restaurantName, locationId] of Object.entries(RESTAURANTS)) {
-    // Use YESTERDAY'S actual sales only — the single most recent calendar day that has
-    // Daily Sales data for this location. Confirmed 2026-08-29 (Emese): this is NOT an
-    // average of several days anymore. Rule: required stock for today = yesterday's
-    // units sold × 1.5, minus whatever is still actually on the shelf right now.
-    // Example: sold 40 yesterday, had 60 in stock yesterday morning → 20 left tonight.
-    // Required stock today = 40 × 1.5 = 60. Order = 60 − 20 = 40.
     const salesForLocation = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
     const recentDates = [...new Set(salesForLocation.map(s => s.fields['Date']).filter(Boolean))]
       .sort()
@@ -463,9 +420,6 @@ async function main() {
     const recentSales = salesForLocation.filter(s => recentDates.includes(s.fields['Date']));
     console.log(`${restaurantName}: using yesterday's sales from ${recentDates[0] || '(no data)'}`);
 
-    // avgUnitsSold[menuItemId] = units sold on that single most recent day (no averaging).
-    // Kept the name "avgUnitsSold" / "avg" below for minimal diff — it's really just
-    // "yesterday's units", not an average, as of the 2026-08-29 formula change.
     const salesByMenuItem = {};
     for (const s of recentSales) {
       const miIds = s.fields['Menu Item'] || [];
@@ -479,7 +433,6 @@ async function main() {
       avgUnitsSold[miId] = arr.reduce((a, b) => a + b, 0);
     }
 
-    // Aggregate average ingredient consumption per Production-Kitchen product.
     const avgConsumption = {};
     for (const [miId, avgUnits] of Object.entries(avgUnitsSold)) {
       const bom = bomByMenuItem[miId];
@@ -498,8 +451,6 @@ async function main() {
     for (const [productId, avg] of Object.entries(avgConsumption)) {
       const par = avg * daysToCover * BUFFER_MULTIPLIER;
       const stock = currentStock(productId, locationId);
-      // Always round UP, never to nearest — under-ordering a batch-produced item (a whole
-      // cake, a kg of dressing) means running out; a small surplus is the safer error.
       const qty = Math.max(0, Math.ceil(par - stock));
       if (qty > 0) restaurantResult[productId] = qty;
     }
@@ -509,20 +460,9 @@ async function main() {
 
   // ---------- Write Orders + Order Items to Airtable (so they appear in Receive Goods) ----------
 
-  // Keep the Order/Order Items in sync with the freshly computed quantities every
-  // time this script runs — the emailed xlsx and what staff see in "Receive Goods"
-  // must always match (confirmed 2026-08-29, after a stale-order incident where the
-  // email got a formula fix but the Airtable Order Items were left with the old,
-  // wrong numbers because the old code just skipped writing once an Order existed).
-  //
-  // Safety guard: if ANY item on an existing Order is already marked Received (goods
-  // receiving has started/finished for it), don't touch that Order's items at all —
-  // reconciling quantities mid-delivery could corrupt an in-progress goods receipt.
-  // Log it clearly so a genuine same-day recompute after receiving starts is visible
-  // rather than silently skipped.
   const existingOrders = await airtableGetAll('Orders');
   const existingOrderItems = await airtableGetAll('Order Items');
-  const ordersByRestaurant = {}; // restaurantName -> order record
+  const ordersByRestaurant = {};
   for (const o of existingOrders) {
     const supplierIds = o.fields['Supplier'] || [];
     const orderDate = (o.fields['Order Date'] || '').slice(0, 10);
@@ -533,7 +473,7 @@ async function main() {
   const alreadyOrdered = new Set(Object.keys(ordersByRestaurant));
 
   for (const [restaurantName, productQtys] of Object.entries(results)) {
-    const items = Object.entries(productQtys); // [productId, qty][]
+    const items = Object.entries(productQtys);
     const existingOrder = ordersByRestaurant[restaurantName];
 
     if (!existingOrder) {
@@ -595,9 +535,6 @@ async function main() {
 
   const productById = Object.fromEntries(products.map(p => [p.id, p.fields]));
   const restaurantNames = Object.keys(RESTAURANTS);
-  // Always list every product the Production Kitchen supplies, not just the ones with
-  // a nonzero suggestion right now — rows with nothing to order stay in the sheet with
-  // blank quantity cells, so the file is always a complete picture, never a partial one.
   const allProductIds = pkProductIds;
 
   const workbook = new ExcelJS.Workbook();
@@ -656,17 +593,6 @@ async function main() {
 
   // ---------- Send email via Resend ----------
 
-  // IMPORTANT: a genuine automated run (workflow_run OR the schedule safety-net tick)
-  // ALWAYS sends the email, no matter how late in the day it actually executes — GitHub
-  // Actions can delay runs under load, and even the upstream Deduction workflow itself
-  // can finish later than expected on a bad day. Silently skipping a late-but-real
-  // automated run would mean the kitchen gets NO order summary that day at all, which
-  // is worse than one arriving late. We only add a "this is late" note to the email
-  // itself so it's clear what happened, instead of leaving anyone to guess.
-  //
-  // Manual test runs (workflow_dispatch) stay silent by default regardless of time of
-  // day. Use the send_email input to opt in when you deliberately want to test the
-  // email itself.
   const currentMadridHour = madridHour(today);
   const isLateRun = currentMadridHour >= MORNING_CUTOFF_HOUR;
   const shouldSendEmail = IS_AUTOMATED_RUN || SEND_EMAIL_OVERRIDE;
@@ -681,17 +607,6 @@ async function main() {
     return;
   }
 
-  // With workflow_run now the primary trigger (Deduction could in principle complete
-  // more than once in edge cases, and the schedule safety-net could also fire the same
-  // day), this still needs to stop a SECOND automated run from re-sending after a real
-  // one already went out. Base this on the Orders idempotency check above.
-  //
-  // IMPORTANT: only apply this to AUTOMATED runs, never to a manual run with send_email
-  // checked. An explicit manual "actually send" click is a direct human command for
-  // THIS run — it must not be silently swallowed just because an earlier run (e.g. an
-  // unchecked silent test) already created the Airtable Order records without ever
-  // emailing anyone. Conflating "Orders exist" with "email was sent" was exactly the
-  // bug that caused a checked, explicit send to go silent on 2026-08-29.
   if (IS_AUTOMATED_RUN) {
     const restaurantsNeedingOrder = Object.entries(results).filter(([, q]) => Object.keys(q).length > 0).map(([r]) => r);
     if (restaurantsNeedingOrder.length > 0 && restaurantsNeedingOrder.every(r => alreadyOrdered.has(r))) {
@@ -719,8 +634,6 @@ async function main() {
       text: (hasAnyOrders
         ? `Attached: suggested order for ${targetDateStr} (${offsetLabel}), by restaurant and total. The sheet always lists every Production Kitchen product; rows with nothing to order are left blank.`
         : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold. Attached anyway for reference (all rows blank).`) + lateNote,
-      // Always attach — the sheet is the full PK product list every day, not just
-      // days where something needs ordering.
       attachments: [{
         filename: `production-kitchen-order-${targetDateStr}.xlsx`,
         content: base64Attachment,
