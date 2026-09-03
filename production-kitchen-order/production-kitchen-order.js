@@ -24,33 +24,32 @@
  *                   the same BOM — so "current stock" here already reflects
  *                   yesterday's sales, not just receiving/waste/manual counts.
  *
- * ---------- Delivery schedule ----------
- * CHANGED 2026-09-03: Production Kitchen no longer delivers on Mondays —
- * reverted from the "every day of the week" rule set on 2026-08-29 (Emese
- * confirmed 2026-09-03 this is effective immediately). On a Monday, this
- * script does nothing at all: no order is computed, no email is sent, no
- * "missed" alert fires — there's genuinely nothing to order for a day with no
- * delivery, this isn't a failure state.
+ * ---------- Delivery schedule & the T+0 -> T+1 transition ----------
+ * Production Kitchen no longer delivers on Mondays (effective 2026-09-03).
  *
- * STILL T+0 for now (TARGET_DAY_OFFSET = 0, unchanged since 2026-08-27): this
- * script orders TODAY for TODAY's own delivery. Switching to real T+1 (order
- * today for tomorrow) is a separate, deliberately deferred change — flipping
- * it on an arbitrary evening would skip an entire day's delivery, because
- * tomorrow morning's run would then target the day AFTER tomorrow instead of
- * tomorrow itself, and nothing would have ordered for tomorrow under the old
- * T+0 rule either (that already happened, or didn't, under the code as it
- * was this morning). That transition needs its own careful one-time handling
- * and will be done as a separate step once this Monday-skip has settled in.
+ * Switching straight to T+1 on the evening of 2026-09-03 would have skipped
+ * Friday's delivery entirely: Thursday's last T+0 run already covered
+ * Thursday, and a same-evening flip would make Friday's run target Saturday
+ * instead of Friday, leaving Friday with no automated order at all. Instead
+ * (confirmed with Emese 2026-09-03): T+0 stays in place through Thu 9/3-Sun
+ * 9/6 (each of those days still needs same-day ordering under the current
+ * rule), and the switch to permanent T+1 takes effect starting Monday
+ * 2026-09-07 — the one day of the week that never needs an order at all (no
+ * delivery), so there is nothing to skip or double up by switching there.
  *
- * Production Kitchen delivery days: Tuesday-Sunday (6 days/week).
- *
- * TEMPORARY (since 2026-08-27, while stock/auto-order/receiving got back in
- * sync after a double-booking incident): order for TODAY (T) instead of
- * tomorrow (T+1). Revert TARGET_DAY_OFFSET to 1 once things have settled —
- * see the note above for why that revert needs care, not just flipping the
- * constant.
- * NOTE: this shifts EVERY downstream date calculation (target date, weekday)
- * by the same amount — no other code changes needed elsewhere in this file.
+ * From 2026-09-07 onward, permanently:
+ *   - Any run Tue-Sun -> targets the next day, daysToCover = 1
+ *   - Monday's run    -> targets Tuesday, same as any other T+1 day (nothing
+ *                        special — Monday itself just isn't a delivery day,
+ *                        it can still place a perfectly normal order FOR
+ *                        Tuesday)
+ *   - Sunday's run    -> would target Monday, which has no delivery, so it's
+ *                        pushed to Tuesday instead, with daysToCover = 2 —
+ *                        that single Tuesday delivery then has to cover both
+ *                        the un-delivered Monday's demand and Tuesday's own.
+ * This mirrors the same daysToCover pattern already used elsewhere in this
+ * codebase (e.g. index.html's ORDER_FREQUENCY_COVERAGE_DAYS for weekly
+ * suppliers) rather than inventing a new concept.
  *
  * Output:
  *   1. Creates an Order + Order Items record per restaurant in Airtable
@@ -112,7 +111,7 @@ async function sendResendEmail({ subject, text }) {
 }
 
 const BUFFER_MULTIPLIER = 1.5;
-const TARGET_DAY_OFFSET = 0; // T+0, still — see the delivery-schedule comment at the top of the file
+const T_PLUS_1_GO_LIVE_DATE = '2026-09-07'; // first Monday after the 2026-09-03 decision — see delivery-schedule comment at top of file
 const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
 
 // Restaurant app-name -> Locations table record id (Retail-role records; see index.html for the
@@ -219,23 +218,37 @@ function isMonday(date) {
   return date.getDay() === 1;
 }
 
+// Returns null if there's nothing to do today (still-T+0 mode, and today is a
+// Monday with no delivery). Otherwise returns { targetDate, daysToCover }.
+function computeTarget(today) {
+  if (isoDate(today) < T_PLUS_1_GO_LIVE_DATE) {
+    // Still T+0: order today for today's own delivery.
+    if (isMonday(today)) return null; // no delivery today, nothing to order
+    return { targetDate: today, daysToCover: 1 };
+  }
+  // T+1, permanently, from the go-live date on.
+  let targetDate = addDays(today, 1);
+  let daysToCover = 1;
+  if (isMonday(targetDate)) {
+    targetDate = addDays(targetDate, 1); // Monday has no delivery — push to Tuesday
+    daysToCover = 2;
+  }
+  return { targetDate, daysToCover };
+}
+
 // ---------- Main ----------
 
 async function main() {
   const today = new Date();
-
-  // Production Kitchen doesn't deliver on Mondays — nothing to order, nothing to
-  // send, this isn't a missed/failure state so no alert either. Just stop here.
-  if (isMonday(today)) {
-    console.log(`${isoDate(today)} is a Monday — Production Kitchen has no delivery today. Nothing to do.`);
+  const info = computeTarget(today);
+  if (!info) {
+    console.log(`${isoDate(today)} is a Monday and we're still in T+0 mode (go-live for T+1 is ${T_PLUS_1_GO_LIVE_DATE}) — Production Kitchen has no delivery today. Nothing to do.`);
     return;
   }
-
-  const targetDate = addDays(today, TARGET_DAY_OFFSET);
+  const { targetDate, daysToCover } = info;
   const targetDateStr = isoDate(targetDate);
   const targetWeekday = targetDate.getDay();
-  const daysToCover = 1; // always 1 under T+0 — see delivery-schedule comment at top of file
-  console.log(`Run date: ${isoDate(today)} — target (T+${TARGET_DAY_OFFSET}) date: ${targetDateStr} (weekday ${targetWeekday}), trigger: "${GITHUB_EVENT_NAME}"`);
+  console.log(`Run date: ${isoDate(today)} — target date: ${targetDateStr} (weekday ${targetWeekday}), days to cover: ${daysToCover}, trigger: "${GITHUB_EVENT_NAME}"`);
 
   const [products, recipes, dailySales, invTxns, locations] = await Promise.all([
     airtableGetAll('Products'),
@@ -619,7 +632,7 @@ async function main() {
     ? ` (Note: this ran later than the usual morning time — around ${currentMadridHour}:00 Madrid time — most likely due to a GitHub Actions scheduling delay. The order contents are still correct.)`
     : '';
   const hasAnyOrders = restaurantNames.some(r => Object.keys(results[r]).length > 0);
-  const offsetLabel = TARGET_DAY_OFFSET === 0 ? 'T (same-day)' : `T+${TARGET_DAY_OFFSET}`;
+  const offsetLabel = daysToCover === 2 ? 'T+1, skipping Monday (covers 2 days of demand)' : (isoDate(today) < T_PLUS_1_GO_LIVE_DATE ? 'T (same-day)' : 'T+1');
   const base64Attachment = buffer.toString('base64');
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
