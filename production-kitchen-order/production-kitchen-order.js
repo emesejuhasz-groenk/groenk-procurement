@@ -400,6 +400,17 @@ async function main() {
   const ledgerEffect = (type, qty) => (type === 'Waste' || type === 'Consumption') ? -Math.abs(qty) : qty;
   const isManualCount = t => t.fields['Type'] === 'Manual Adjustment' && String(t.fields['Notes'] || '').toLowerCase().includes('manual count');
 
+  // ---------- Current stock (physical-count-aware, never negative) ----------
+  // CHANGED 2026-09-09 (confirmed with Emese): physical stock can never actually
+  // be below zero — if it "ran out," the true value is 0, not some negative
+  // number. Earlier, a deeply negative computed value (from unlogged waste,
+  // stale physical counts, etc.) fed straight into the order formula and wildly
+  // over-ordered (e.g. Beef Burger patty showing stock=-9, inflating a 25.5
+  // target into an order of 35). This function now floors its result at 0 for
+  // every caller (order suggestions, any future display) — the raw, un-floored
+  // math is still used separately by the negative-stock alert below, so drift
+  // detection doesn't lose visibility just because the number is now clamped
+  // here.
   function currentStock(productId, locationId) {
     const txns = invTxns.filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId));
 
@@ -408,7 +419,8 @@ async function main() {
       if (isManualCount(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
     }
     if (!lastCount) {
-      return txns.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0);
+      const raw = txns.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0);
+      return Math.max(0, raw);
     }
 
     const baseline = txns
@@ -419,7 +431,8 @@ async function main() {
     const after = txns.filter(t =>
       t.createdTime > lastCount.createdTime && (t.fields['Date'] || '') >= (lastCount.fields['Date'] || '')
     );
-    return after.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
+    const raw = after.reduce((sum, t) => sum + ledgerEffect(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
+    return Math.max(0, raw);
   }
 
   // results[restaurantName][productId] = order quantity
