@@ -336,6 +336,14 @@ async function main() {
     return { balance, lastCountDate: lastCount.fields['Date'] || null };
   }
 
+  // CHANGED 2026-09-09 (confirmed with Emese): physical stock can never actually be
+  // negative — "Stock Status After Transaction" now stamps the floored-at-0 value,
+  // since that's what's actually true and what any future reader (a human, or this
+  // script's own alert below) should see as "the stock." The RAW running total is
+  // kept separately (rawFinalByKey) purely so the negative-stock alert can still
+  // detect drift — flooring first would hide the exact problem this alert exists to
+  // catch.
+  const rawFinalByKey = {};
   const byProductLocation = {};
   for (const rec of consumptionRecords) {
     const key = `${rec['Related Product'][0]}|${rec['Location'][0]}`;
@@ -351,12 +359,13 @@ async function main() {
         // Backfilling a date before the most recent physical count — already
         // implicitly reflected in that count's number, so don't apply it to the
         // running total (would double-count); just stamp the unaffected balance.
-        rec['Stock Status After Transaction'] = String(Math.round(running * 1000) / 1000);
+        rec['Stock Status After Transaction'] = String(Math.max(0, Math.round(running * 1000) / 1000));
         continue;
       }
       running = ledgerEffect(rec['Type'], rec['Quantity']) + running;
-      rec['Stock Status After Transaction'] = String(Math.round(running * 1000) / 1000);
+      rec['Stock Status After Transaction'] = String(Math.max(0, Math.round(running * 1000) / 1000));
     }
+    rawFinalByKey[key] = running;
   }
 
   // ---------- Negative stock alert ----------
@@ -370,8 +379,7 @@ async function main() {
   // needs to be recorded — it only adds visibility on top.
   const negativeStockAlerts = [];
   for (const [key, recs] of Object.entries(byProductLocation)) {
-    const last = recs[recs.length - 1];
-    const finalBalance = Number(last['Stock Status After Transaction']);
+    const finalBalance = rawFinalByKey[key];
     if (finalBalance < 0) {
       const [productId, locationId] = key.split('|');
       negativeStockAlerts.push({
