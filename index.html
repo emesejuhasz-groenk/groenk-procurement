@@ -211,6 +211,11 @@ const SPIRIT_UNIT_ML = {
 const LEDGER_EFFECT = (type, qty) => (type === 'Waste' || type === 'Consumption') ? -Math.abs(qty) : qty;
 const IS_MANUAL_COUNT = t => t.fields['Type'] === 'Manual Adjustment' && String(t.fields['Notes'] || '').toLowerCase().includes('manual count');
 
+// CHANGED 2026-09-09 (confirmed with Emese): physical stock can never actually be
+// negative — if it "ran out," the true value is 0. Every caller (Inventory display,
+// New Order suggestions, Today's Prep) now gets a floored-at-0 result, so a deeply
+// negative ledger value (unlogged waste, a stale physical count, etc.) can no longer
+// inflate an order suggestion or show a confusing negative "in stock" number.
 function computeCurrentStock(allTxns, productId, locationId) {
   const relevant = allTxns.filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId));
   let lastCount = null;
@@ -218,13 +223,15 @@ function computeCurrentStock(allTxns, productId, locationId) {
     if (IS_MANUAL_COUNT(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
   }
   if (!lastCount) {
-    return relevant.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0);
+    const raw = relevant.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0);
+    return Math.max(0, raw);
   }
   const baseline = relevant.filter(t => t.createdTime < lastCount.createdTime)
     .reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0)
     + LEDGER_EFFECT(lastCount.fields['Type'], Number(lastCount.fields['Quantity']) || 0);
   const after = relevant.filter(t => t.createdTime > lastCount.createdTime && (t.fields['Date'] || '') >= (lastCount.fields['Date'] || ''));
-  return after.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
+  const raw = after.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
+  return Math.max(0, raw);
 }
 
 function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) {
