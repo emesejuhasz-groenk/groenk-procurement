@@ -72,7 +72,22 @@ if (!AIRTABLE_TOKEN || !RESEND_API_KEY) {
 
 // ---------- Airtable helpers (same pattern as the other two scripts) ----------
 
-async function airtableGetAll(table) {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// CHANGED 2026-09-14: this table (especially Daily Sales, which only grows) can take
+// many dozens of paginated requests to fully fetch. The first real failure seen —
+// "Unexpected token '<'... is not valid JSON" — means Airtable (or an edge/proxy in
+// front of it) returned an HTML error page instead of JSON for one request, most
+// likely a transient hiccup or a brief rate-limit response, and the old code had no
+// retry at all, so a single bad response failed the whole run. Two fixes: (1) retry
+// each page a few times with backoff before giving up, and (2) main() below now
+// fetches the four tables one after another instead of all in parallel — four
+// concurrent paginated fetches against the same base was needlessly aggressive for a
+// once-a-week job with no real time pressure, and is the likely reason a rate limit
+// or transient error got hit in the first place.
+async function airtableGetAll(table, { maxRetries = 4 } = {}) {
   const headers = { Authorization: `Bearer ${AIRTABLE_TOKEN}` };
   let records = [];
   let offset;
@@ -80,8 +95,33 @@ async function airtableGetAll(table) {
     const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(table)}`);
     url.searchParams.set('pageSize', '100');
     if (offset) url.searchParams.set('offset', offset);
-    const res = await fetch(url, { headers });
-    const data = await res.json();
+
+    let data;
+    let lastErr;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await fetch(url, { headers });
+        const bodyText = await res.text();
+        if (!res.ok) {
+          lastErr = new Error(`Airtable getAll(${table}): HTTP ${res.status} — ${bodyText.slice(0, 300)}`);
+        } else {
+          try {
+            data = JSON.parse(bodyText);
+          } catch (parseErr) {
+            lastErr = new Error(`Airtable getAll(${table}): non-JSON response (status ${res.status}) — ${bodyText.slice(0, 300)}`);
+          }
+        }
+      } catch (networkErr) {
+        lastErr = networkErr;
+      }
+      if (data) break;
+      if (attempt < maxRetries) {
+        const backoffMs = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s, 8s
+        console.log(`${table}: request failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms — ${lastErr.message}`);
+        await sleep(backoffMs);
+      }
+    }
+    if (!data) throw lastErr;
     if (data.error) throw new Error(`Airtable getAll(${table}): ${data.error.message}`);
     records = records.concat(data.records);
     offset = data.offset;
@@ -510,12 +550,14 @@ async function main() {
   const weeks = weeksBetween(new Date(HISTORY_START_DATE), lastWeekEnd);
   console.log(`Last completed week: ${isoDate(lastWeekStart)} to ${isoDate(lastWeekEnd)}. History report covers ${weeks.length} week(s) from ${HISTORY_START_DATE}.`);
 
-  const [dailySalesRaw, products, recipes, invTxns] = await Promise.all([
-    airtableGetAll('Daily Sales'),
-    airtableGetAll('Products'),
-    airtableGetAll('Recipes (BOM)'),
-    airtableGetAll('Inventory Transactions'),
-  ]);
+  // Fetched one table at a time (not Promise.all) — see the comment on
+  // airtableGetAll above for why: four large paginated fetches all at once against
+  // the same base was the likely trigger for the rate-limit / transient error seen
+  // on 2026-09-14, and this job has no real time pressure (runs once a week).
+  const dailySalesRaw = await airtableGetAll('Daily Sales');
+  const products = await airtableGetAll('Products');
+  const recipes = await airtableGetAll('Recipes (BOM)');
+  const invTxns = await airtableGetAll('Inventory Transactions');
 
   // Daily Sales' "Menu Item" field is a linked-record array of {id, name} in the
   // Airtable REST API when fetched this way is actually just an array of ids — the
