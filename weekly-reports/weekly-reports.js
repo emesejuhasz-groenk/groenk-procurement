@@ -333,12 +333,69 @@ async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, 
 
   const WEIGHT_TO_GRAMS = { g: 1, gr: 1, gramm: 1, kg: 1000 };
   const VOLUME_TO_ML = { ml: 1, cl: 10, dl: 100, l: 1000, liter: 1000, litre: 1000 };
-  function convertQty(qty, fromUnit, toUnit, packSize, weightPerUnitG) {
+  // CHANGED 2026-09-14 (bug found by Emese): this conversion function was missing the
+  // product-specific bottle/box/keg/spirit maps that index.html and
+  // production-kitchen-order.js already have — so anything measured in cl/ml but
+  // ORDERED in boxes or units (Gin Groenk, Mucho Más, Pampelle, Vermouth, spirits,
+  // Tónica, etc.) fell through to "unreliable" and got silently dropped from this
+  // report entirely (Gin&Tonic, Negroni, and Tinto de verano's wine all showed as
+  // ~0 consumption because of this, even right after their recipes were fixed).
+  // These maps are copied verbatim from index.html — keep them in sync if either
+  // file's map changes.
+  const BOTTLE_PRODUCTS = {
+    'rec0GG6FuoGVhppOX': { bottleMl: 750, boxBottles: 6 },
+    'recr5eRYcQ9DjtF8N': { bottleMl: 750, boxBottles: 12 },
+    'recNPOqxkKjbxruPm': { bottleMl: 750, boxBottles: 6 },
+    'recfaXavJa7Mfn95b': { bottleMl: 750, boxBottles: 6 },
+    'recOur09D12vya1TO': { bottleMl: 750, boxBottles: 6 },
+    'recFkhzAQHnJQFOv6': { bottleMl: 750, boxBottles: 6 },
+    'recqcp3W6BLYP7HLz': { bottleMl: 750, boxBottles: 6 },
+    'recbmyjGTpXCAgRdf': { bottleMl: 750, boxBottles: 6 },
+    'recvWB7SPBW8yCbyw': { bottleMl: 750, boxBottles: 6 },
+    'rectHW7Se1XBPFbF7': { bottleMl: 750, boxBottles: 6 },
+    'recuDpwaPhpDe5Qh0': { bottleMl: 750, boxBottles: 6 },
+    'rec5lgdtonSCCuXKn': { bottleMl: 750, boxBottles: 6 },
+    'recBZqhgUHiq9bP1d': { bottleMl: 500, boxBottles: 6 },
+    'recYff3VN3LLhBP3R': { bottleMl: 700, boxBottles: 6 },
+    'recJVtCM5aKx3fkUs': { bottleMl: 700, boxBottles: 6 },
+    'recO3hYm1bTCEbHwE': { bottleMl: 750, boxBottles: 6 },
+    'recLnrqeL5oKywzpO': { bottleMl: 750, boxBottles: 6 },
+    'recrvnmrObLfFgOZO': { bottleMl: 200, boxBottles: 24 },
+    'recLWTdCvXT0VPUoV': { bottleMl: 700, boxBottles: 12 },
+  };
+  const BULK_LITER_PRODUCTS = {
+    'recQuqcE97aPWh9gx': 3, 'recQZGUy989QpkbZe': 3, 'recJmkJvH3IRDwWrc': 3, 'recoPQdKRSxB8nKEt': 3,
+    'recMaHap0Kptnyc8N': 10,
+    'recwIdBFCutoKf1ud': 9,
+  };
+  const KEG_PRODUCTS = { 'recg4kyyl1P4ionxe': 30 };
+  const SPIRIT_UNIT_ML = {
+    'recUriSKeofDsx7kv': 1000, 'recTGua3HEngFSkYa': 700, 'recdqGIw0Ou0Gy5GV': 700, 'recA0GesDatR3B7ry': 1000,
+  };
+  function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) {
     const f = String(fromUnit || '').toLowerCase().trim();
     const t = String(toUnit || '').toLowerCase().trim();
     if (f === t) return qty;
     if (WEIGHT_TO_GRAMS[f] && WEIGHT_TO_GRAMS[t]) return qty * WEIGHT_TO_GRAMS[f] / WEIGHT_TO_GRAMS[t];
     if (VOLUME_TO_ML[f] && VOLUME_TO_ML[t]) return qty * VOLUME_TO_ML[f] / VOLUME_TO_ML[t];
+    const spiritUnitMl = SPIRIT_UNIT_ML[productId];
+    if (spiritUnitMl && t === 'unit') {
+      const ml = VOLUME_TO_ML[f] ? qty * VOLUME_TO_ML[f] : null;
+      if (ml === null) return null;
+      return ml / spiritUnitMl;
+    }
+    const bottleInfo = BOTTLE_PRODUCTS[productId];
+    if (bottleInfo && t.includes('box')) {
+      const bottles = f === 'bottle' ? qty : (VOLUME_TO_ML[f] ? (qty * VOLUME_TO_ML[f]) / bottleInfo.bottleMl : qty);
+      return bottles / bottleInfo.boxBottles;
+    }
+    const litersPerBox = BULK_LITER_PRODUCTS[productId];
+    if (litersPerBox && (t.includes('box') || t.includes('pack'))) {
+      const ml = VOLUME_TO_ML[f] ? qty * VOLUME_TO_ML[f] : qty * 1000;
+      return ml / 1000 / litersPerBox;
+    }
+    const litersPerKeg = KEG_PRODUCTS[productId];
+    if (litersPerKeg && VOLUME_TO_ML[f]) return (qty * VOLUME_TO_ML[f]) / 1000 / litersPerKeg;
     if (WEIGHT_TO_GRAMS[f] && weightPerUnitG) return (qty * WEIGHT_TO_GRAMS[f]) / weightPerUnitG;
     const startedAsWeightOrVolume = WEIGHT_TO_GRAMS[f] !== undefined || VOLUME_TO_ML[f] !== undefined;
     if (!startedAsWeightOrVolume && packSize) return qty / packSize;
@@ -376,7 +433,7 @@ async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, 
       const bom = bomByMenuItem[miId];
       if (!bom) continue;
       for (const { productId, qtyPerUnit, bomUnit } of bom) {
-        const converted = convertQty(qtyPerUnit, bomUnit, productById[productId]['Unit'], productById[productId]['Pack Size'], productById[productId]['Weight per Unit (g)']);
+        const converted = convertQty(qtyPerUnit, bomUnit, productById[productId]['Unit'], productId, productById[productId]['Pack Size'], productById[productId]['Weight per Unit (g)']);
         if (converted === null) continue;
         bucket[productId] = (bucket[productId] || 0) + units * converted;
       }
@@ -415,15 +472,28 @@ async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, 
   const byCat = {};
   for (const pid of trackedProductIds) {
     const p = productById[pid] || {};
-    const deia = Math.round((result['Deià'][pid] || 0) * 100) / 100;
-    const fornalutx = Math.round((result['Fornalutx'][pid] || 0) * 100) / 100;
-    const soller = Math.round((result['Soller Pizza'][pid] || 0) * 100) / 100;
+    let deia = Math.round((result['Deià'][pid] || 0) * 100) / 100;
+    let fornalutx = Math.round((result['Fornalutx'][pid] || 0) * 100) / 100;
+    let soller = Math.round((result['Soller Pizza'][pid] || 0) * 100) / 100;
+    let unit = p['Unit'] || '';
+    // CHANGED 2026-09-14 (requested by Emese): a fractional box ("0.17 box/caja") is
+    // hard to picture — for anything the kitchen actually holds as individual bottles
+    // (wine, gin, other spirits — see BOTTLE_PRODUCTS above), show real bottle counts
+    // instead. Purely a display choice for this report; ordering elsewhere still
+    // works in boxes.
+    const bottleInfo = BOTTLE_PRODUCTS[pid];
+    if (bottleInfo) {
+      deia = Math.round(deia * bottleInfo.boxBottles * 100) / 100;
+      fornalutx = Math.round(fornalutx * bottleInfo.boxBottles * 100) / 100;
+      soller = Math.round(soller * bottleInfo.boxBottles * 100) / 100;
+      unit = 'bottle';
+    }
     const total = deia + fornalutx + soller;
     if (!total) continue; // nothing consumed anywhere last week — leave off the list
     // Bread comes from Forn de Barri, not the Production Kitchen — call that out
     // clearly so it doesn't read as something the kitchen itself needs to produce.
     const cat = EXTRA_TRACKED_PRODUCT_IDS.includes(pid) ? 'Kenyér (Forn de Barri — csak infó, nem PK)' : (p['Order Category'] || 'Other');
-    (byCat[cat] = byCat[cat] || []).push({ name: (p['Name'] || '').trim(), unit: p['Unit'] || '', deia, fornalutx, soller, total });
+    (byCat[cat] = byCat[cat] || []).push({ name: (p['Name'] || '').trim(), unit, deia, fornalutx, soller, total });
   }
   const CATEGORY_ORDER_PK_FULL = [...CATEGORY_ORDER_PK, 'Kenyér (Forn de Barri — csak infó, nem PK)'];
   for (const cat of CATEGORY_ORDER_PK_FULL) {
