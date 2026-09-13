@@ -188,6 +188,7 @@ const BOTTLE_PRODUCTS = {
 const BULK_LITER_PRODUCTS = {
   'recQuqcE97aPWh9gx': 3, 'recQZGUy989QpkbZe': 3, 'recJmkJvH3IRDwWrc': 3, 'recoPQdKRSxB8nKEt': 3,
   'recMaHap0Kptnyc8N': 10,
+  'recwIdBFCutoKf1ud': 9, // Metro Chef Leche Entera 1.5L (6 UD) — 6 x 1.5L = 9L per box
 };
 const KEG_PRODUCTS = { 'recg4kyyl1P4ionxe': 30 };
 // Spirits poured by the cl/ml (BOM records the shot size) but ORDERED as whole bottles
@@ -571,41 +572,82 @@ function NewOrderScreen({ user, api }) {
     if (isProductionKitchen || !userLocationId) return { result: {}, unreliableCount: 0 };
     const unreliableProducts = new Set();
     const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(userLocationId));
-    const allDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse();
-    const recentDates = allDates.slice(0, 7);
-    const recentSales = salesHere.filter(s => recentDates.includes(s.fields['Date']));
-    const daysCovered = recentDates.length || 1;
-
-    const salesByMenuItem = {};
-    for (const s of recentSales) {
-      const units = Number(s.fields['Units sold']) || 0;
-      for (const miId of (s.fields['Menu Item'] || [])) (salesByMenuItem[miId] = salesByMenuItem[miId] || []).push(units);
-    }
-    // Per-day average across the whole window (including days it didn't sell at all),
-    // not per-row — a glass of wine sold on 3 of the last 7 days still needs its true
-    // daily average, zero-days included, or a weekly order undershoots badly.
-    const avgUnitsSold = {};
-    for (const [miId, arr] of Object.entries(salesByMenuItem)) avgUnitsSold[miId] = arr.reduce((a,b)=>a+b, 0) / daysCovered;
 
     const supplierProductIds = new Set(filteredProducts.map(p => p.id));
     const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
     const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
     const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
     const productCoverageDaysById = Object.fromEntries(products.map(p => [p.id, ORDER_FREQUENCY_COVERAGE_DAYS[p.fields['Shelf Life Code']] || DEFAULT_COVERAGE_DAYS]));
+    const productIsDrink = Object.fromEntries(products.map(p => [p.id, p.fields['Order Category'] === 'Drink']));
 
-    const avgConsumption = {};
+    // ---------- Non-drink products: unchanged — 7-day rolling average x order-frequency coverage days x 1.5 buffer ----------
+    const allDates = [...new Set(salesHere.map(s => s.fields['Date']).filter(Boolean))].sort().reverse();
+    const recentDates = allDates.slice(0, 7);
+    const recentSales = salesHere.filter(s => recentDates.includes(s.fields['Date']));
+    const daysCovered = recentDates.length || 1;
+    const salesByMenuItem7d = {};
+    for (const s of recentSales) {
+      const units = Number(s.fields['Units sold']) || 0;
+      for (const miId of (s.fields['Menu Item'] || [])) (salesByMenuItem7d[miId] = salesByMenuItem7d[miId] || []).push(units);
+    }
+    const avgUnitsSold = {};
+    for (const [miId, arr] of Object.entries(salesByMenuItem7d)) avgUnitsSold[miId] = arr.reduce((a,b)=>a+b, 0) / daysCovered;
+
+    // ---------- Drink products: last COMPLETED Monday-Sunday week's raw total ----------
+    // CHANGED 2026-09-13 (confirmed with Emese): drink products (wine, beer, soft
+    // drinks, spirits, coffee, everything with Order Category = "Drink") don't spoil
+    // on the shelf, so they no longer use the order-frequency/coverage-days formula
+    // above. Instead: order = ceil(max(0, 2 x last week's total sold - current stock)),
+    // in the product's own stocking unit (so a wine sold by the glass or bottle still
+    // converts to boxes the same way it always has via convertQty/BOTTLE_PRODUCTS).
+    // "Last week" always means the most recently COMPLETED Monday-Sunday week,
+    // regardless of which day of the current week the order screen is opened on —
+    // so opening it Monday, Tuesday, or any other day this week shows the same
+    // suggestion, based on the week that just finished.
+    function lastCompletedWeekRange(today) {
+      const daysSinceMonday = (today.getDay() + 6) % 7; // 0 if today is itself Monday
+      const thisWeekMonday = new Date(today);
+      thisWeekMonday.setDate(today.getDate() - daysSinceMonday);
+      const lastWeekSunday = new Date(thisWeekMonday);
+      lastWeekSunday.setDate(thisWeekMonday.getDate() - 1);
+      const lastWeekMonday = new Date(lastWeekSunday);
+      lastWeekMonday.setDate(lastWeekSunday.getDate() - 6);
+      return { startStr: lastWeekMonday.toISOString().slice(0, 10), endStr: lastWeekSunday.toISOString().slice(0, 10) };
+    }
+    const { startStr: lastWeekStart, endStr: lastWeekEnd } = lastCompletedWeekRange(new Date());
+    const lastWeekSales = salesHere.filter(s => {
+      const d = s.fields['Date'];
+      return d && d >= lastWeekStart && d <= lastWeekEnd;
+    });
+    const salesByMenuItemLastWeek = {};
+    for (const s of lastWeekSales) {
+      const units = Number(s.fields['Units sold']) || 0;
+      for (const miId of (s.fields['Menu Item'] || [])) {
+        salesByMenuItemLastWeek[miId] = (salesByMenuItemLastWeek[miId] || 0) + units;
+      }
+    }
+
+    // ---------- Convert menu-item sales to product-level demand via BOM (both tracks) ----------
+    const avgConsumption = {};      // non-drink: per-day average, in product's stocking unit
+    const weeklyConsumption = {};   // drink: last completed week's raw total, in product's stocking unit
     for (const r of recipes) {
       const compIds = (r.fields['Component (Product)'] || []).filter(id => supplierProductIds.has(id));
       if (!compIds.length) continue;
+      const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
+      const bomUnit = r.fields['Unit'] || 'unit';
       for (const miId of (r.fields['Menu Item'] || [])) {
-        const avgUnits = avgUnitsSold[miId];
-        if (!avgUnits) continue;
-        const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
-        const bomUnit = r.fields['Unit'] || 'unit';
         for (const productId of compIds) {
           const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId, productPackSizeById[productId], productWeightPerUnitById[productId]);
           if (converted === null) { unreliableProducts.add(productId); continue; }
-          avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted; // avgUnits is now a per-day average
+          if (productIsDrink[productId]) {
+            const weekUnits = salesByMenuItemLastWeek[miId];
+            if (!weekUnits) continue;
+            weeklyConsumption[productId] = (weeklyConsumption[productId] || 0) + weekUnits * converted;
+          } else {
+            const avgUnits = avgUnitsSold[miId];
+            if (!avgUnits) continue;
+            avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
+          }
         }
       }
     }
@@ -615,6 +657,10 @@ function NewOrderScreen({ user, api }) {
       const coverageDays = productCoverageDaysById[productId] || DEFAULT_COVERAGE_DAYS;
       const par = avgPerDay * coverageDays * ORDER_SUGGESTION_BUFFER;
       const qty = Math.max(0, Math.ceil(par - currentStock(productId)));
+      if (qty > 0) result[productId] = qty;
+    }
+    for (const [productId, weekTotal] of Object.entries(weeklyConsumption)) {
+      const qty = Math.max(0, Math.ceil(2 * weekTotal - currentStock(productId)));
       if (qty > 0) result[productId] = qty;
     }
     return { result, unreliableCount: unreliableProducts.size };
@@ -1649,35 +1695,13 @@ function InfoScreen() {
 // single long A-Z list.
 const RESTAURANT_ORDER = ['Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro', 'Soller - Groenk Pizza'];
 
-// ---------- Delivery schedule & the T+0 -> T+1 transition ----------
-// Must match production-kitchen-order.js exactly — see that file's header
-// comment for the full reasoning. Production Kitchen no longer delivers on
-// Mondays (effective 2026-09-03). T+0 stays in place through 2026-09-06, and
-// permanent T+1 (order today for tomorrow) takes effect starting Monday
-// 2026-09-07 — the one day of the week that never needs an order anyway, so
-// switching there skips nothing. From that date on, a Sunday run's target
-// (which would land on Monday) is pushed to Tuesday with daysToCover = 2.
-const T_PLUS_1_GO_LIVE_DATE = '2026-09-07';
-
-function isMonday(date) {
-  return date.getDay() === 1; // 0=Sun, 1=Mon, ... 6=Sat
-}
-
-// Returns null if there's nothing to prep today (still-T+0 mode, and today is
-// a Monday with no delivery). Otherwise { targetDate, daysToCover }.
+// ---------- Delivery schedule: back to permanent T+0, every day ----------
+// CHANGED 2026-09-13 (confirmed with Emese): reverted the T+1 / Monday-skip
+// experiment. Production Kitchen delivers every day again, and this screen is
+// back to preparing T+0 (today's prep is for today's own delivery) every
+// single day, including Monday. Must match production-kitchen-order.js.
 function computeTarget(today) {
-  if (today.toISOString().slice(0, 10) < T_PLUS_1_GO_LIVE_DATE) {
-    if (isMonday(today)) return null;
-    return { targetDate: today, daysToCover: 1 };
-  }
-  let targetDate = new Date(today);
-  targetDate.setDate(targetDate.getDate() + 1);
-  let daysToCover = 1;
-  if (isMonday(targetDate)) {
-    targetDate.setDate(targetDate.getDate() + 1);
-    daysToCover = 2;
-  }
-  return { targetDate, daysToCover };
+  return { targetDate: today, daysToCover: 1 };
 }
 
 function PrepScreen({ user, api }) {
@@ -1729,9 +1753,7 @@ function PrepScreen({ user, api }) {
     }
 
     const out = {};
-    const targetInfo = computeTarget(new Date());
-    if (!targetInfo) return out; // still-T+0 mode and today is Monday — no delivery
-    const { daysToCover } = targetInfo;
+    const { daysToCover } = computeTarget(new Date());
     for (const restaurantName of RESTAURANT_ORDER) {
       const locationId = LOCATION_IDS[restaurantName];
       const salesHere = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
@@ -1768,8 +1790,7 @@ function PrepScreen({ user, api }) {
   }, [loading, products, recipes, dailySales, invTxns]);
 
   const today = new Date().toISOString().slice(0, 10);
-  const targetInfo = computeTarget(new Date());
-  const targetDateStr = targetInfo ? targetInfo.targetDate.toISOString().slice(0, 10) : null;
+  const targetDateStr = today;
   function existingOrderFor(restaurantName) {
     if (!targetDateStr) return null;
     return existingOrders.find(o => (o.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID) && o.fields['Restaurant'] === restaurantName && (o.fields['Order Date'] || '').slice(0, 10) === targetDateStr);
@@ -1839,7 +1860,7 @@ function PrepScreen({ user, api }) {
   return (
     <div className="content">
       <div style={{ marginBottom: '1.25rem' }}>
-        <div className="section-label">Today's prep — {today}{targetDateStr ? ` · for delivery ${targetDateStr}${targetInfo.daysToCover === 2 ? ' (covers 2 days — Monday has no delivery)' : ''}` : ' · no Production Kitchen delivery today (Monday)'}</div>
+        <div className="section-label">Today's prep — {today}</div>
         <div className="nav-scroll" style={{ marginTop: 8 }}>
           {RESTAURANT_ORDER.map(r => (
             <button key={r} className={`nav-btn ${activeRestaurant === r ? 'active' : ''}`}
