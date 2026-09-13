@@ -1,0 +1,33 @@
+name: Weekly Sales & Production Kitchen Reports
+on:
+  schedule:
+    # Monday 04:30 UTC = 05:30 Madrid (CEST, summer) / 06:30 Madrid (CET, winter) —
+    # safely before the 07:00 Madrid target either way. Unlike the daily T+0 order
+    # script, this doesn't depend on any other workflow finishing first (it only
+    # reads historical Daily Sales for the week that already fully closed on
+    # Sunday), so a plain weekly schedule is enough — no workflow_run chaining needed.
+    - cron: '30 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'Manual run (e.g. resending a report, or backfilling after a fix) — always sends both emails.'
+        type: string
+        default: ''
+jobs:
+  send-weekly-reports:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./weekly-reports
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install
+      - name: Run weekly reports script
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: npm start
