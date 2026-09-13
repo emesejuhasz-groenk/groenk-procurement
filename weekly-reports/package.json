@@ -1,0 +1,13 @@
+{
+  "name": "weekly-reports",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Grøenk weekly Monday reports: sales-by-category (controlling@groenk.com) and Production Kitchen weekly consumption (productionkitchengroenk@gmail.com)",
+  "main": "weekly-reports.js",
+  "scripts": {
+    "start": "node weekly-reports.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}
