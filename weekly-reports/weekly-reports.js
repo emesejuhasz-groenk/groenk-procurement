@@ -17,11 +17,14 @@
  *      always self-heals.
  *
  *   2. Production Kitchen weekly consumption -> productionkitchengroenk@gmail.com
- *      For last week ONLY: every PK-supplied product's actual total consumption
- *      (units sold x Recipes/BOM, no buffer — this is a historical "what actually
- *      got used" report, not a forecast), by restaurant + Total. This is what the
- *      kitchen actually needs to have produced/delivered last week, so they can
- *      plan this week's production run.
+ *      For last week ONLY: every PK-supplied product's actual total consumption —
+ *      units sold x Recipes/BOM, PLUS Waste-type Inventory Transactions for that
+ *      product (confirmed with Emese 2026-09-14: waste is still PK-produced stock
+ *      that had to be made — spoilage, staff food, etc. — so it belongs in "what
+ *      the kitchen needed to supply", not just what got sold) — no buffer, this is
+ *      a historical "what actually got used" report, not a forecast. By restaurant
+ *      + Total. This is what the kitchen actually needs to have produced/delivered
+ *      last week, so they can plan this week's production run.
  *
  * This is a SEPARATE, independent process from production-kitchen-order.js (the
  * daily T+0 same-day order, still running every day including Monday) and from
@@ -316,7 +319,7 @@ async function buildSalesByCategoryReport(dailySales, weeks) {
 
 // ---------- Report 2: PK product consumption, last week only, no buffer ----------
 
-async function buildPkConsumptionReport(dailySales, products, recipes, week) {
+async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, week) {
   const pkProducts = products.filter(p => (p.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID));
   const pkProductIds = new Set(pkProducts.map(p => p.id));
   const productById = Object.fromEntries(products.map(p => [p.id, p.fields]));
@@ -346,7 +349,12 @@ async function buildPkConsumptionReport(dailySales, products, recipes, week) {
     }
   }
 
-  // result[restaurant][productId] = total units consumed last week
+  // result[restaurant][productId] = total units the Production Kitchen needed to have
+  // supplied last week — sold (via Daily Sales x BOM) PLUS wasted (Waste-type Inventory
+  // Transactions). Both represent real product that had to be produced/delivered:
+  // waste is stock that was made, then thrown out or eaten as staff food, not stock
+  // that was never needed. Manual Adjustment corrections are NOT included here — those
+  // are drift fixes to the ledger, not a real consumption event.
   const result = { 'Deià': {}, Fornalutx: {}, 'Soller Pizza': {} };
   for (const s of dailySales) {
     const f = s.fields;
@@ -366,6 +374,22 @@ async function buildPkConsumptionReport(dailySales, products, recipes, week) {
         bucket[productId] = (bucket[productId] || 0) + units * converted;
       }
     }
+  }
+
+  // Add PK-product Waste — already in the product's own stocking unit (no BOM
+  // conversion needed, unlike sales which go menu-item -> BOM -> product).
+  for (const t of invTxns) {
+    const tf = t.fields;
+    if (tf['Type'] !== 'Waste') continue;
+    const date = tf['Date'];
+    if (!date || date < isoDate(week.start) || date > isoDate(week.end)) continue;
+    const productId = (tf['Related Product'] || [])[0];
+    if (!productId || !pkProductIds.has(productId)) continue;
+    const location = LOCATION_NAME_BY_ID[(tf['Location'] || [])[0]];
+    const bucket = result[location];
+    if (!bucket) continue;
+    const qty = Number(tf['Quantity']) || 0;
+    bucket[productId] = (bucket[productId] || 0) + Math.abs(qty);
   }
 
   const wb = new ExcelJS.Workbook();
@@ -415,10 +439,11 @@ async function main() {
   const weeks = weeksBetween(new Date(HISTORY_START_DATE), lastWeekEnd);
   console.log(`Last completed week: ${isoDate(lastWeekStart)} to ${isoDate(lastWeekEnd)}. History report covers ${weeks.length} week(s) from ${HISTORY_START_DATE}.`);
 
-  const [dailySalesRaw, products, recipes] = await Promise.all([
+  const [dailySalesRaw, products, recipes, invTxns] = await Promise.all([
     airtableGetAll('Daily Sales'),
     airtableGetAll('Products'),
     airtableGetAll('Recipes (BOM)'),
+    airtableGetAll('Inventory Transactions'),
   ]);
 
   // Daily Sales' "Menu Item" field is a linked-record array of {id, name} in the
@@ -441,12 +466,12 @@ async function main() {
     attachments: [{ filename: `heti-eladas-kategoriankent-${isoDate(lastWeekEnd)}.xlsx`, content: Buffer.from(salesBuffer).toString('base64') }],
   });
 
-  const pkWb = await buildPkConsumptionReport(dailySalesRaw, products, recipes, { start: lastWeekStart, end: lastWeekEnd });
+  const pkWb = await buildPkConsumptionReport(dailySalesRaw, products, recipes, invTxns, { start: lastWeekStart, end: lastWeekEnd });
   const pkBuffer = await pkWb.xlsx.writeBuffer();
   await sendResendEmail({
     to: PRODUCTION_KITCHEN_EMAIL,
     subject: `Heti termékfogyás (múlt hét: ${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)})`,
-    text: `Csatolva, mennyi Production Kitchen-es termék fogyott ténylegesen a múlt héten (${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)}), éttermenként és összesen — puffer nélkül, ez a tényleges felhasználás, ebből tervezhető a heti gyártás.`,
+    text: `Csatolva, mennyi Production Kitchen-es termék fogyott ténylegesen a múlt héten (${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)}), éttermenként és összesen — eladás + selejt/waste együtt, puffer nélkül, ez a tényleges felhasználás, ebből tervezhető a heti gyártás.`,
     attachments: [{ filename: `pk-heti-fogyas-${isoDate(lastWeekEnd)}.xlsx`, content: Buffer.from(pkBuffer).toString('base64') }],
   });
 }
