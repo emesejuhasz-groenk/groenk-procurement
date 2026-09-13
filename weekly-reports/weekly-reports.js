@@ -225,7 +225,6 @@ async function buildSalesByCategoryReport(dailySales, weeks) {
   const WEEK_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A5460' } };
   const CAT_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E6B75' } };
   const SUB_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E8E8' } };
-  const SUBTOTAL_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F5F0' } };
   const WHITE_BOLD = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
   const BOLD = { name: 'Arial', bold: true, size: 10 };
   const NORMAL = { name: 'Arial', size: 9 };
@@ -258,10 +257,24 @@ async function buildSalesByCategoryReport(dailySales, weeks) {
   ws.getColumn(1).width = 42;
   for (let c = 2; c <= ncols + 1; c++) ws.getColumn(c).width = 11;
 
+  // Bold font for the "Total" sub-column of each week (every 4th data column).
+  const TOTAL_BOLD = { name: 'Arial', size: 9, bold: true };
+  const isTotalCol = c => (c - 2) % 4 === 3; // c=5,9,13... are each week's Total column
+  const isLastColOfWeek = c => (c - 1) % 4 === 0 && c > 1; // right edge of each week's 4-col block
+  const WEEK_BORDER = { style: 'medium', color: { argb: 'FF123F46' } };
+
+  function applyWeekBorders(row) {
+    for (let c = 2; c <= ncols + 1; c++) {
+      if (isLastColOfWeek(c)) row.getCell(c).border = { ...(row.getCell(c).border || {}), right: WEEK_BORDER };
+    }
+  }
+  applyWeekBorders(headerRow1);
+  applyWeekBorders(headerRow2);
+
   for (const [cat, subs] of CATEGORY_ORDER) {
     const catRow = ws.addRow([cat]);
     for (let c = 1; c <= ncols + 1; c++) { catRow.getCell(c).fill = CAT_FILL; catRow.getCell(c).font = WHITE_BOLD; }
-    const catSubtotalRowNumbers = [];
+    applyWeekBorders(catRow);
     for (const sub of subs) {
       const items = CATEGORY_MAP[sub];
       // Only show items that had at least one sale anywhere in the whole window.
@@ -269,14 +282,11 @@ async function buildSalesByCategoryReport(dailySales, weeks) {
       if (!itemsWithSales.length) continue;
       const subRow = ws.addRow([`  ${sub}`]);
       for (let c = 1; c <= ncols + 1; c++) { subRow.getCell(c).fill = SUB_FILL; subRow.getCell(c).font = BOLD; }
-      // Sort items by total units across the whole window, descending.
-      const totals = itemsWithSales.map(it => {
-        let t = 0;
-        for (const w of weeks) for (const l of locs) t += (cube[w.label][l] || {})[it] || 0;
-        return { it, t };
-      }).sort((a, b) => b.t - a.t);
-      const itemRowNumbers = [];
-      for (const { it } of totals) {
+      applyWeekBorders(subRow);
+      // Alphabetical within each subcategory (requested by Emese 2026-09-14 — easier
+      // to find a specific item than sorted by volume).
+      const sortedItems = [...itemsWithSales].sort((a, b) => a.localeCompare(b, 'hu'));
+      for (const it of sortedItems) {
         const row = [it];
         for (const w of weeks) {
           let weekTotal = 0;
@@ -288,29 +298,10 @@ async function buildSalesByCategoryReport(dailySales, weeks) {
           row.push(weekTotal);
         }
         const r = ws.addRow(row);
-        for (let c = 1; c <= ncols + 1; c++) r.getCell(c).font = NORMAL;
-        itemRowNumbers.push(r.number);
+        for (let c = 1; c <= ncols + 1; c++) r.getCell(c).font = isTotalCol(c) ? TOTAL_BOLD : NORMAL;
+        applyWeekBorders(r);
       }
-      const subTotalRow = ws.addRow([`  ${sub} — összesen`]);
-      for (let c = 2; c <= ncols + 1; c++) {
-        const colLetter = ws.getColumn(c).letter;
-        subTotalRow.getCell(c).value = { formula: `SUM(${colLetter}${itemRowNumbers[0]}:${colLetter}${itemRowNumbers[itemRowNumbers.length - 1]})` };
-        subTotalRow.getCell(c).fill = SUBTOTAL_FILL;
-        subTotalRow.getCell(c).font = { name: 'Arial', size: 9, italic: true, bold: true };
-      }
-      subTotalRow.getCell(1).fill = SUBTOTAL_FILL;
-      subTotalRow.getCell(1).font = { name: 'Arial', size: 9, italic: true, bold: true };
-      catSubtotalRowNumbers.push(subTotalRow.number);
     }
-    const catTotalRow = ws.addRow([`${cat} — MINDÖSSZESEN`]);
-    for (let c = 2; c <= ncols + 1; c++) {
-      const colLetter = ws.getColumn(c).letter;
-      catTotalRow.getCell(c).value = { formula: catSubtotalRowNumbers.map(r => `${colLetter}${r}`).join('+') };
-      catTotalRow.getCell(c).fill = CAT_FILL;
-      catTotalRow.getCell(c).font = WHITE_BOLD;
-    }
-    catTotalRow.getCell(1).fill = CAT_FILL;
-    catTotalRow.getCell(1).font = WHITE_BOLD;
     ws.addRow([]);
   }
   ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 2 }];
