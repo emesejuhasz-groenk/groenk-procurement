@@ -322,6 +322,13 @@ async function buildSalesByCategoryReport(dailySales, weeks) {
 async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, week) {
   const pkProducts = products.filter(p => (p.fields['Supplier'] || []).includes(PRODUCTION_KITCHEN_SUPPLIER_ID));
   const pkProductIds = new Set(pkProducts.map(p => p.id));
+  // CHANGED 2026-09-14 (confirmed with Emese): bread stays ordered from Forn de Barri
+  // for now, but she wants to see its actual weekly consumption in this same report
+  // (she's considering baking it in-house instead). Its recipe links are already
+  // complete and correct — this just widens which products the report looks at,
+  // it does NOT move bread's ordering into the Production Kitchen flow.
+  const EXTRA_TRACKED_PRODUCT_IDS = ['recUG7d0L9yAzmJqE', 'reck0eDw2y9CIrfGs']; // Bread / Pan - 1.5kg, Bread / Pan - 1kg (Forn de Barri)
+  const trackedProductIds = new Set([...pkProductIds, ...EXTRA_TRACKED_PRODUCT_IDS]);
   const productById = Object.fromEntries(products.map(p => [p.id, p.fields]));
 
   const WEIGHT_TO_GRAMS = { g: 1, gr: 1, gramm: 1, kg: 1000 };
@@ -340,7 +347,7 @@ async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, 
 
   const bomByMenuItem = {};
   for (const r of recipes) {
-    const compIds = (r.fields['Component (Product)'] || []).filter(id => pkProductIds.has(id));
+    const compIds = (r.fields['Component (Product)'] || []).filter(id => trackedProductIds.has(id));
     if (!compIds.length) continue;
     const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
     const bomUnit = r.fields['Unit'] || 'unit';
@@ -384,7 +391,7 @@ async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, 
     const date = tf['Date'];
     if (!date || date < isoDate(week.start) || date > isoDate(week.end)) continue;
     const productId = (tf['Related Product'] || [])[0];
-    if (!productId || !pkProductIds.has(productId)) continue;
+    if (!productId || !trackedProductIds.has(productId)) continue;
     const location = LOCATION_NAME_BY_ID[(tf['Location'] || [])[0]];
     const bucket = result[location];
     if (!bucket) continue;
@@ -406,17 +413,20 @@ async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, 
 
   const CATEGORY_ORDER_PK = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
   const byCat = {};
-  for (const pid of pkProductIds) {
+  for (const pid of trackedProductIds) {
     const p = productById[pid] || {};
     const deia = Math.round((result['Deià'][pid] || 0) * 100) / 100;
     const fornalutx = Math.round((result['Fornalutx'][pid] || 0) * 100) / 100;
     const soller = Math.round((result['Soller Pizza'][pid] || 0) * 100) / 100;
     const total = deia + fornalutx + soller;
     if (!total) continue; // nothing consumed anywhere last week — leave off the list
-    const cat = p['Order Category'] || 'Other';
+    // Bread comes from Forn de Barri, not the Production Kitchen — call that out
+    // clearly so it doesn't read as something the kitchen itself needs to produce.
+    const cat = EXTRA_TRACKED_PRODUCT_IDS.includes(pid) ? 'Kenyér (Forn de Barri — csak infó, nem PK)' : (p['Order Category'] || 'Other');
     (byCat[cat] = byCat[cat] || []).push({ name: (p['Name'] || '').trim(), unit: p['Unit'] || '', deia, fornalutx, soller, total });
   }
-  for (const cat of CATEGORY_ORDER_PK) {
+  const CATEGORY_ORDER_PK_FULL = [...CATEGORY_ORDER_PK, 'Kenyér (Forn de Barri — csak infó, nem PK)'];
+  for (const cat of CATEGORY_ORDER_PK_FULL) {
     const rows = byCat[cat];
     if (!rows || !rows.length) continue;
     rows.sort((a, b) => b.total - a.total);
