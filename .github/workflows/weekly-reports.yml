@@ -1,12 +1,19 @@
 name: Weekly Sales & Production Kitchen Reports
 on:
   schedule:
-    # Monday 04:30 UTC = 05:30 Madrid (CEST, summer) / 06:30 Madrid (CET, winter) —
-    # safely before the 07:00 Madrid target either way. Unlike the daily T+0 order
-    # script, this doesn't depend on any other workflow finishing first (it only
-    # reads historical Daily Sales for the week that already fully closed on
-    # Sunday), so a plain weekly schedule is enough — no workflow_run chaining needed.
+    # Primary tick: Monday 04:30 UTC = 05:30 Madrid (CEST, summer) / 06:30 Madrid
+    # (CET, winter) — safely before the 07:00 Madrid target either way.
     - cron: '30 4 * * 1'
+    # SAFETY NET, added 2026-09-14 after the first scheduled run silently never
+    # fired at all (confirmed via the Actions history — every run that week was
+    # workflow_dispatch, none was schedule). This matches the exact same GitHub
+    # Actions quirk already documented in production-kitchen-order.js: a
+    # newly-created or just-changed schedule trigger can silently skip its very
+    # first eligible window. A second, later tick the same morning costs nothing
+    # (main() is idempotent — it always recomputes the same "last completed week"
+    # regardless of which tick runs it) and means a single missed primary window
+    # doesn't turn into a whole missed week.
+    - cron: '0 6 * * 1'
   workflow_dispatch:
     inputs:
       note:
