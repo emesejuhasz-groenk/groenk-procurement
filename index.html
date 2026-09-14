@@ -217,7 +217,17 @@ const IS_MANUAL_COUNT = t => t.fields['Type'] === 'Manual Adjustment' && String(
 // New Order suggestions, Today's Prep) now gets a floored-at-0 result, so a deeply
 // negative ledger value (unlogged waste, a stale physical count, etc.) can no longer
 // inflate an order suggestion or show a confusing negative "in stock" number.
-function computeCurrentStock(allTxns, productId, locationId) {
+// CHANGED 2026-09-14 (real bug found by Emese): the 2026-09-09 "never negative"
+// clamp broke manual stock corrections. saveCount() below needs the TRUE
+// (possibly deeply negative) underlying ledger value to compute a correct delta —
+// if it instead sees the clamped-to-0 display value, a correction like "set this
+// to 2" only nudges the real ledger from e.g. -50 to -48, which still clamps to 0
+// on screen, making the count look like it silently failed to save (it didn't —
+// it just wasn't enough). Added a `clamp` parameter, default true (every existing
+// caller — order suggestions, on-screen "in stock" display — keeps getting the
+// safe, floored-at-0 number); only saveCount() now calls this with clamp=false to
+// get the real number for its delta math.
+function computeCurrentStock(allTxns, productId, locationId, clamp = true) {
   const relevant = allTxns.filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId));
   let lastCount = null;
   for (const t of relevant) {
@@ -225,14 +235,14 @@ function computeCurrentStock(allTxns, productId, locationId) {
   }
   if (!lastCount) {
     const raw = relevant.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0);
-    return Math.max(0, raw);
+    return clamp ? Math.max(0, raw) : raw;
   }
   const baseline = relevant.filter(t => t.createdTime < lastCount.createdTime)
     .reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), 0)
     + LEDGER_EFFECT(lastCount.fields['Type'], Number(lastCount.fields['Quantity']) || 0);
   const after = relevant.filter(t => t.createdTime > lastCount.createdTime && (t.fields['Date'] || '') >= (lastCount.fields['Date'] || ''));
   const raw = after.reduce((sum, t) => sum + LEDGER_EFFECT(t.fields['Type'], Number(t.fields['Quantity']) || 0), baseline);
-  return Math.max(0, raw);
+  return clamp ? Math.max(0, raw) : raw;
 }
 
 function convertQty(qty, fromUnit, toUnit, productId, packSize, weightPerUnitG) {
@@ -1369,8 +1379,8 @@ function InventoryScreen({ user, api }) {
   useEffect(() => { load(); }, []);
 
   const locationId = LOCATION_IDS[location];
-  function currentStock(productId) {
-    return computeCurrentStock(txns, productId, locationId);
+  function currentStock(productId, clamp = true) {
+    return computeCurrentStock(txns, productId, locationId, clamp);
   }
 
   async function saveCount(productId) {
@@ -1379,7 +1389,7 @@ function InventoryScreen({ user, api }) {
     const override = INVENTORY_COUNT_OVERRIDE[productId];
     const enteredCount = Number(val);
     const newCount = override ? enteredCount / override.countsPerStockUnit : enteredCount;
-    const delta = newCount - currentStock(productId);
+    const delta = newCount - currentStock(productId, /* clamp */ false);
     if (delta === 0) { setCounts(c => { const n = { ...c }; delete n[productId]; return n; }); return; }
     setSaving(productId);
     try {
