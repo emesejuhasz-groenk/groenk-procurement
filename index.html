@@ -1481,8 +1481,12 @@ function InventoryScreen({ user, api }) {
 function WasteScreen({ user, api }) {
   const [products, setProducts] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [menuItems, setMenuItems] = useState([]);
+  const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [wasteMode, setWasteMode] = useState('product'); // 'product' | 'dish'
   const [productId, setProductId] = useState('');
+  const [dishId, setDishId] = useState('');
   const [qty, setQty] = useState('');
   const [reason, setReason] = useState(WASTE_REASONS[0]);
   const [notes, setNotes] = useState('');
@@ -1491,10 +1495,15 @@ function WasteScreen({ user, api }) {
 
   async function load() {
     try {
-      const [p, s, t] = await Promise.all([api.getAll('Products'), api.getAll('Suppliers'), api.getAll('Inventory Transactions')]);
+      const [p, s, t, mi, bom] = await Promise.all([
+        api.getAll('Products'), api.getAll('Suppliers'), api.getAll('Inventory Transactions'),
+        api.getAll('Menu Items'), api.getAll('Recipes (BOM)'),
+      ]);
       const active = p.filter(x => x.fields['Active'] !== false);
       setProducts(active);
       setSuppliers(s);
+      setMenuItems(mi);
+      setRecipes(bom);
       if (active.length) setProductId(active[0].id);
       const locationId = LOCATION_IDS[user.restaurant];
       setRecent(t.filter(x => x.fields['Type'] === 'Waste' && (x.fields['Location'] || []).includes(locationId))
@@ -1503,6 +1512,74 @@ function WasteScreen({ user, api }) {
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+
+  // ---------- Restaurant Dishes: waste a whole finished dish ----------
+  // ADDED 2026-09-14 (requested by Emese): staff often need to log an entire
+  // finished dish as waste (a burger given away as staff food, a plate that came
+  // back, a pizza that burned) — not the raw ingredients. Rather than making them
+  // work out and log each ingredient separately, this mode reuses the same
+  // Recipes (BOM) that already drives the daily sales deduction: pick a dish,
+  // enter how many, and it writes one Waste transaction per underlying product,
+  // in the product's own stocking unit, via the same convertQty() every other
+  // screen already uses. No new Airtable table needed — this is built entirely
+  // from Menu Items + Recipes (BOM), which already exist.
+  const productUnitById = React.useMemo(() => Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit'])), [products]);
+  const productPackSizeById = React.useMemo(() => Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']])), [products]);
+  const productWeightPerUnitById = React.useMemo(() => Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']])), [products]);
+  const bomByMenuItem = React.useMemo(() => {
+    const map = {};
+    for (const r of recipes) {
+      const compIds = r.fields['Component (Product)'] || [];
+      const qtyPerUnit = Number(r.fields['Quantity per unit']) || 0;
+      const bomUnit = r.fields['Unit'] || 'unit';
+      for (const miId of (r.fields['Menu Item'] || [])) {
+        for (const productId of compIds) (map[miId] = map[miId] || []).push({ productId, qtyPerUnit, bomUnit });
+      }
+    }
+    return map;
+  }, [recipes]);
+  // Only dishes that actually have a recipe pointing to a real, active product —
+  // otherwise there'd be nothing to deduct.
+  const activeProductIds = React.useMemo(() => new Set(products.map(p => p.id)), [products]);
+  const dishOptions = React.useMemo(() => {
+    return menuItems
+      .filter(m => (bomByMenuItem[m.id] || []).some(c => activeProductIds.has(c.productId)))
+      .map(m => ({ id: m.id, name: m.fields['Name'] || '' }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'hu'));
+  }, [menuItems, bomByMenuItem, activeProductIds]);
+  const menuItemNameById = React.useMemo(() => Object.fromEntries(menuItems.map(m => [m.id, m.fields['Name'] || ''])), [menuItems]);
+
+  async function submitDishWaste() {
+    if (!dishId || !qty || Number(qty) <= 0) return;
+    setSaving(true);
+    try {
+      const dishCount = Number(qty);
+      const bom = (bomByMenuItem[dishId] || []).filter(c => activeProductIds.has(c.productId));
+      const skipped = [];
+      const writes = [];
+      for (const { productId: pid, qtyPerUnit, bomUnit } of bom) {
+        const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[pid], pid, productPackSizeById[pid], productWeightPerUnitById[pid]);
+        if (converted === null) { skipped.push(pid); continue; }
+        writes.push({
+          'Date': new Date().toISOString().slice(0,10),
+          'Type': 'Waste',
+          'Quantity': dishCount * converted,
+          'Related Product': [pid],
+          'Location': [LOCATION_IDS[user.restaurant]],
+          'Waste Reason': reason,
+          'Notes': `${dishCount}x ${menuItemNameById[dishId]} (${reason})${notes ? ' — ' + notes : ''}`.trim(),
+          'Transaction Added By': user.name,
+        });
+      }
+      await Promise.all(writes.map(fields => api.create('Inventory Transactions', fields)));
+      if (skipped.length) {
+        alert(`Mentve, de ${skipped.length} alapanyagot nem sikerült átváltani (hiányzó mértékegység-adat) — ezeket kézzel is rögzítheted a "Nyers alapanyag" módban.`);
+      }
+      setQty(''); setNotes(''); setReason(WASTE_REASONS[0]);
+      await load();
+    } catch(e) { alert('Error: ' + e.message); }
+    finally { setSaving(false); }
+  }
 
   async function submitWaste() {
     if (!productId || !qty || Number(qty) <= 0) return;
@@ -1541,29 +1618,69 @@ function WasteScreen({ user, api }) {
   return (
     <div className="content">
       <div className="card">
-        <div className="section-label">Product</div>
-        <select value={productId} onChange={e => setProductId(e.target.value)} style={{ marginBottom: 12 }}>
-          {suppliers.map(s => {
-            const ps = products.filter(p => (p.fields['Supplier'] || []).includes(s.id));
-            if (!ps.length) return null;
-            return (
-              <optgroup key={s.id} label={s.fields['Name']}>
-                {ps.map(p => <option key={p.id} value={p.id}>{p.fields['Name']} ({INVENTORY_COUNT_OVERRIDE[p.id] ? INVENTORY_COUNT_OVERRIDE[p.id].countUnit : p.fields['Unit']})</option>)}
-              </optgroup>
-            );
-          })}
-        </select>
-        <div className="section-label">Quantity wasted{INVENTORY_COUNT_OVERRIDE[productId] ? ` (in ${INVENTORY_COUNT_OVERRIDE[productId].countUnit})` : ''}</div>
-        <input type="text" inputMode="decimal" placeholder="0" value={qty} onChange={e => setQty(e.target.value.replace(',', '.'))} style={{ marginBottom: 12 }} />
-        <div className="section-label">Reason</div>
-        <select value={reason} onChange={e => setReason(e.target.value)} style={{ marginBottom: 12 }}>
-          {WASTE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <div className="section-label">Details (optional)</div>
-        <input type="text" placeholder="e.g. fish went off, delivery too early" value={notes} onChange={e => setNotes(e.target.value)} style={{ marginBottom: 14 }} />
-        <button className="btn-primary" onClick={submitWaste} disabled={!productId || !qty || saving}>
-          {saving ? <span className="spinner"></span> : 'Log waste'}
-        </button>
+        <div className="section-label">Mode</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button
+            style={{ flex: 1, background: wasteMode === 'product' ? 'var(--petrol)' : '#fff', color: wasteMode === 'product' ? '#fff' : 'var(--petrol)', borderColor: 'var(--border-strong)' }}
+            onClick={() => setWasteMode('product')}>
+            Nyers alapanyag
+          </button>
+          <button
+            style={{ flex: 1, background: wasteMode === 'dish' ? 'var(--petrol)' : '#fff', color: wasteMode === 'dish' ? '#fff' : 'var(--petrol)', borderColor: 'var(--border-strong)' }}
+            onClick={() => setWasteMode('dish')}>
+            Étteremi fogás
+          </button>
+        </div>
+
+        {wasteMode === 'dish' ? (
+          <>
+            <div className="section-label">Dish</div>
+            <select value={dishId} onChange={e => setDishId(e.target.value)} style={{ marginBottom: 12 }}>
+              <option value="">Select a dish...</option>
+              {dishOptions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <div className="section-label">How many portions</div>
+            <input type="text" inputMode="decimal" placeholder="0" value={qty} onChange={e => setQty(e.target.value.replace(',', '.'))} style={{ marginBottom: 12 }} />
+            <div className="section-label">Reason</div>
+            <select value={reason} onChange={e => setReason(e.target.value)} style={{ marginBottom: 12 }}>
+              {WASTE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+            <div className="section-label">Details (optional)</div>
+            <input type="text" placeholder="e.g. sent back, order mistake" value={notes} onChange={e => setNotes(e.target.value)} style={{ marginBottom: 14 }} />
+            <button className="btn-primary" onClick={submitDishWaste} disabled={!dishId || !qty || saving}>
+              {saving ? <span className="spinner"></span> : 'Log dish waste'}
+            </button>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, textAlign: 'center' }}>
+              A recept alapján automatikusan levonja az összes hozzávalót a készletből — nem kell egyenként megadnod.
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="section-label">Product</div>
+            <select value={productId} onChange={e => setProductId(e.target.value)} style={{ marginBottom: 12 }}>
+              {suppliers.map(s => {
+                const ps = products.filter(p => (p.fields['Supplier'] || []).includes(s.id));
+                if (!ps.length) return null;
+                return (
+                  <optgroup key={s.id} label={s.fields['Name']}>
+                    {ps.map(p => <option key={p.id} value={p.id}>{p.fields['Name']} ({INVENTORY_COUNT_OVERRIDE[p.id] ? INVENTORY_COUNT_OVERRIDE[p.id].countUnit : p.fields['Unit']})</option>)}
+                  </optgroup>
+                );
+              })}
+            </select>
+            <div className="section-label">Quantity wasted{INVENTORY_COUNT_OVERRIDE[productId] ? ` (in ${INVENTORY_COUNT_OVERRIDE[productId].countUnit})` : ''}</div>
+            <input type="text" inputMode="decimal" placeholder="0" value={qty} onChange={e => setQty(e.target.value.replace(',', '.'))} style={{ marginBottom: 12 }} />
+            <div className="section-label">Reason</div>
+            <select value={reason} onChange={e => setReason(e.target.value)} style={{ marginBottom: 12 }}>
+              {WASTE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+            <div className="section-label">Details (optional)</div>
+            <input type="text" placeholder="e.g. fish went off, delivery too early" value={notes} onChange={e => setNotes(e.target.value)} style={{ marginBottom: 14 }} />
+            <button className="btn-primary" onClick={submitWaste} disabled={!productId || !qty || saving}>
+              {saving ? <span className="spinner"></span> : 'Log waste'}
+            </button>
+          </>
+        )}
       </div>
 
       {recent.length > 0 && (
