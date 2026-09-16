@@ -1,0 +1,27 @@
+name: Daily Sales Watchdog
+on:
+  schedule:
+    # 05:15 UTC = 06:15 Madrid (CEST) / 07:15 Madrid (CET) — after both Cowork
+    # import tasks (04:30 and 06:00 Madrid) should have finished, and before the
+    # 07:00 Madrid Production Kitchen order, so a gap is caught before it feeds
+    # into that order rather than only being noticed after the fact.
+    - cron: '15 5 * * *'
+  workflow_dispatch: {}
+jobs:
+  check-daily-sales:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./daily-sales-watchdog
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install
+      - name: Run watchdog
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: npm start
