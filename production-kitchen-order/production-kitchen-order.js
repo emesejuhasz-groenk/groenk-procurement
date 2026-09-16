@@ -397,6 +397,14 @@ async function main() {
 
   // results[restaurantName][productId] = order quantity
   const results = {};
+  // CHANGED 2026-09-16 (real incident: Deià's Sept 15 POS data never arrived, and
+  // this script silently fell back to Sept 14 without anyone noticing until the
+  // order already looked wrong). Track, per restaurant, whether the data it's
+  // actually using is for the expected date (yesterday) or something older —
+  // and if so, put a loud warning at the very top of the email, not just in a log
+  // nobody reads.
+  const expectedYesterday = isoDate(addDays(targetDate, -1));
+  const staleDataWarnings = [];
   for (const [restaurantName, locationId] of Object.entries(RESTAURANTS)) {
     const salesForLocation = dailySales.filter(s => (s.fields['Location'] || []).includes(locationId));
     const recentDates = [...new Set(salesForLocation.map(s => s.fields['Date']).filter(Boolean))]
@@ -405,6 +413,10 @@ async function main() {
       .slice(0, 1);
     const recentSales = salesForLocation.filter(s => recentDates.includes(s.fields['Date']));
     console.log(`${restaurantName}: using yesterday's sales from ${recentDates[0] || '(no data)'}`);
+    if (recentDates[0] !== expectedYesterday) {
+      staleDataWarnings.push({ restaurantName, foundDate: recentDates[0] || null, expectedDate: expectedYesterday });
+      console.log(`WARNING: ${restaurantName} has no Daily Sales for ${expectedYesterday} — falling back to ${recentDates[0] || 'nothing at all'}.`);
+    }
 
     const salesByMenuItem = {};
     for (const s of recentSales) {
@@ -606,6 +618,17 @@ async function main() {
     : '';
   const hasAnyOrders = restaurantNames.some(r => Object.keys(results[r]).length > 0);
   const offsetLabel = 'T (same-day)';
+  // CHANGED 2026-09-16: put the stale-data warning at the very front of both the
+  // subject and body — this is the thing most likely to make someone actually
+  // open and read the email instead of glancing past it, which is exactly what
+  // happened with the Deià Sept 15 gap.
+  const staleWarningLines = staleDataWarnings.map(w =>
+    w.foundDate
+      ? `⚠️ ${w.restaurantName}: no sales data for ${w.expectedDate} — this order used ${w.foundDate} instead. Check the POS import before trusting these numbers.`
+      : `⚠️ ${w.restaurantName}: NO sales data found at all. This order is empty/unreliable for this restaurant.`
+  );
+  const staleWarningText = staleWarningLines.length ? staleWarningLines.join('\n') + '\n\n' : '';
+  const subjectPrefix = staleWarningLines.length ? '⚠️ DATA GAP — ' : '';
   const base64Attachment = buffer.toString('base64');
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -616,8 +639,8 @@ async function main() {
     body: JSON.stringify({
       from: EMAIL_FROM,
       to: [EMAIL_TO],
-      subject: `Production Kitchen Order — ${targetDateStr}`,
-      text: (hasAnyOrders
+      subject: `${subjectPrefix}Production Kitchen Order — ${targetDateStr}`,
+      text: staleWarningText + (hasAnyOrders
         ? `Attached: suggested order for ${targetDateStr} (${offsetLabel}), by restaurant and total. The sheet always lists every Production Kitchen product; rows with nothing to order are left blank.`
         : `No items to order for ${targetDateStr} — nothing crossed the buffer threshold. Attached anyway for reference (all rows blank).`) + lateNote,
       attachments: [{
