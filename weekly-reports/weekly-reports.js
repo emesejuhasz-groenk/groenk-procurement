@@ -570,12 +570,29 @@ async function main() {
     s.__menuItemName = menuItemNameById[ids[0]] || null;
   }
 
+  // CHANGED 2026-09-16 (real incident: Deià's Sept 15 Daily Sales never arrived,
+  // and it took Emese noticing an oddly-empty order by hand to catch it). Check,
+  // for the week this report covers, whether each of the 3 restaurants has at
+  // least one Daily Sales record on every day — and if any day is completely
+  // missing for a restaurant, say so loudly at the top of both emails, in
+  // addition to whatever the report itself shows for that (silently zero) day.
+  const gapWarnings = [];
+  for (const [locName, locId] of Object.entries(LOCATION_IDS)) {
+    for (let d = new Date(lastWeekStart); d <= lastWeekEnd; d = addDays(d, 1)) {
+      const dateStr = isoDate(d);
+      const hasAny = dailySalesRaw.some(s => s.fields['Date'] === dateStr && (s.fields['Location'] || []).includes(locId));
+      if (!hasAny) gapWarnings.push(`⚠️ ${locName}: no Daily Sales data at all for ${dateStr} — that day is silently showing as zero everywhere in this report.`);
+    }
+  }
+  const gapWarningText = gapWarnings.length ? gapWarnings.join('\n') + '\n\n' : '';
+  const gapSubjectPrefix = gapWarnings.length ? '⚠️ DATA GAP — ' : '';
+
   const salesWb = await buildSalesByCategoryReport(dailySalesRaw, weeks);
   const salesBuffer = await salesWb.xlsx.writeBuffer();
   await sendResendEmail({
     to: CONTROLLING_EMAIL,
-    subject: `Heti eladási riport kategóriánként — ${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)} zárva`,
-    text: `Csatolva a teljes heti eladási bontás, kategóriánként és éttermenként (Deià / Fornalutx / Sóller Pizza + Total), ${HISTORY_START_DATE}-tól a most lezárt hétig (${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)}).`,
+    subject: `${gapSubjectPrefix}Heti eladási riport kategóriánként — ${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)} zárva`,
+    text: gapWarningText + `Csatolva a teljes heti eladási bontás, kategóriánként és éttermenként (Deià / Fornalutx / Sóller Pizza + Total), ${HISTORY_START_DATE}-tól a most lezárt hétig (${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)}).`,
     attachments: [{ filename: `heti-eladas-kategoriankent-${isoDate(lastWeekEnd)}.xlsx`, content: Buffer.from(salesBuffer).toString('base64') }],
   });
 
@@ -583,8 +600,8 @@ async function main() {
   const pkBuffer = await pkWb.xlsx.writeBuffer();
   await sendResendEmail({
     to: PRODUCTION_KITCHEN_EMAIL,
-    subject: `Heti termékfogyás (múlt hét: ${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)})`,
-    text: `Csatolva, mennyi Production Kitchen-es termék fogyott ténylegesen a múlt héten (${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)}), éttermenként és összesen — eladás + selejt/waste együtt, puffer nélkül, ez a tényleges felhasználás, ebből tervezhető a heti gyártás.`,
+    subject: `${gapSubjectPrefix}Heti termékfogyás (múlt hét: ${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)})`,
+    text: gapWarningText + `Csatolva, mennyi Production Kitchen-es termék fogyott ténylegesen a múlt héten (${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)}), éttermenként és összesen — eladás + selejt/waste együtt, puffer nélkül, ez a tényleges felhasználás, ebből tervezhető a heti gyártás.`,
     attachments: [{ filename: `pk-heti-fogyas-${isoDate(lastWeekEnd)}.xlsx`, content: Buffer.from(pkBuffer).toString('base64') }],
   });
 }
