@@ -1,0 +1,11 @@
+{
+  "name": "daily-sales-watchdog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Independent check that yesterday's Daily Sales data arrived for all 3 Grøenk restaurants — alerts controlling@groenk.com if not.",
+  "main": "daily-sales-watchdog.js",
+  "scripts": {
+    "start": "node daily-sales-watchdog.js"
+  },
+  "dependencies": {}
+}
