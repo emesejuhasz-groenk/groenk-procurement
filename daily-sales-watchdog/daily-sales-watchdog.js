@@ -47,17 +47,23 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Same retry-on-transient-error approach as weekly-reports.js — a single
-// paginated fetch, but only ever needs to look at one day's worth of records
-// (filtered server-side), so this stays cheap and fast even with retries.
-async function airtableGetFiltered(table, filterFormula, { maxRetries = 4 } = {}) {
+// CHANGED 2026-09-17 (real false alarm found by Emese): this used to filter
+// server-side via Airtable's filterByFormula with a Date-equality formula
+// ({Date} = 'YYYY-MM-DD'). That's unreliable — Airtable's formula engine can
+// treat a Date field's internal representation differently from the plain
+// 'YYYY-MM-DD' string the REST API returns for client-side reads, and it
+// produced a false "missing" alert for all 3 restaurants on a day the data
+// definitely existed (independently confirmed by hand). Switched to the exact
+// same approach the other two scripts already use successfully all week: fetch
+// records with no server-side date filter, then compare the Date field as a
+// plain string client-side. Slightly more data over the wire, but proven correct.
+async function airtableGetAll(table, { maxRetries = 4 } = {}) {
   const headers = { Authorization: `Bearer ${AIRTABLE_TOKEN}` };
   let records = [];
   let offset;
   do {
     const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(table)}`);
     url.searchParams.set('pageSize', '100');
-    url.searchParams.set('filterByFormula', filterFormula);
     if (offset) url.searchParams.set('offset', offset);
 
     let data;
@@ -67,12 +73,12 @@ async function airtableGetFiltered(table, filterFormula, { maxRetries = 4 } = {}
         const res = await fetch(url, { headers });
         const bodyText = await res.text();
         if (!res.ok) {
-          lastErr = new Error(`Airtable getFiltered(${table}): HTTP ${res.status} — ${bodyText.slice(0, 300)}`);
+          lastErr = new Error(`Airtable getAll(${table}): HTTP ${res.status} — ${bodyText.slice(0, 300)}`);
         } else {
           try {
             data = JSON.parse(bodyText);
           } catch (parseErr) {
-            lastErr = new Error(`Airtable getFiltered(${table}): non-JSON response (status ${res.status}) — ${bodyText.slice(0, 300)}`);
+            lastErr = new Error(`Airtable getAll(${table}): non-JSON response (status ${res.status}) — ${bodyText.slice(0, 300)}`);
           }
         }
       } catch (networkErr) {
@@ -86,7 +92,7 @@ async function airtableGetFiltered(table, filterFormula, { maxRetries = 4 } = {}
       }
     }
     if (!data) throw lastErr;
-    if (data.error) throw new Error(`Airtable getFiltered(${table}): ${data.error.message}`);
+    if (data.error) throw new Error(`Airtable getAll(${table}): ${data.error.message}`);
     records = records.concat(data.records);
     offset = data.offset;
   } while (offset);
@@ -109,17 +115,12 @@ async function main() {
   const today = new Date();
   const yesterday = isoDate(addDays(today, -1));
 
-  // Airtable's Location field on Daily Sales links by record id, and
-  // filterByFormula can't easily test "does this linked field include id X" —
-  // but it CAN test the record id directly against a lookup, so instead we just
-  // pull every Daily Sales row for yesterday's date (a small, single-day slice)
-  // and check locations against it client-side. Far cheaper than pulling the
-  // whole table like the other two scripts do.
-  const rows = await airtableGetFiltered('Daily Sales', `{Date} = '${yesterday}'`);
+  const rows = await airtableGetAll('Daily Sales');
+  const yesterdayRows = rows.filter(r => r.fields['Date'] === yesterday);
 
   const missing = [];
   for (const [locName, locId] of Object.entries(LOCATION_IDS)) {
-    const hasAny = rows.some(r => (r.fields['Location'] || []).includes(locId));
+    const hasAny = yesterdayRows.some(r => (r.fields['Location'] || []).includes(locId));
     if (!hasAny) missing.push(locName);
   }
 
