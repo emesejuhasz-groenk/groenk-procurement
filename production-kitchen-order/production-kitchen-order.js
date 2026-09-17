@@ -341,6 +341,25 @@ async function main() {
   const productUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Unit'] || 'unit']));
   const productPackSizeById = Object.fromEntries(products.map(p => [p.id, p.fields['Pack Size']]));
   const productWeightPerUnitById = Object.fromEntries(products.map(p => [p.id, p.fields['Weight per Unit (g)']]));
+  // CHANGED 2026-09-17 (real gap found by Emese): Drink-category PK products
+  // (cordials, wine, Gin Groenk, etc.) were still using this script's normal T+0
+  // formula (yesterday's single day x 1.5) even though PK delivers them daily
+  // too, and Emese specifically asked (2026-09-13) for these to use the same
+  // "2 x last completed week's sales - stock, rounded up to a box" formula that
+  // was already built into the New Order screen (index.html). A rarely-sold
+  // drink like Cordial Mango can easily show 0 sales on any single day, which
+  // made the T+0 formula say "0 needed" even while real stock was quietly
+  // running out over weeks — exactly what happened here. Every other category
+  // is unaffected; only Order Category === 'Drink' switches to the weekly math.
+  const productIsDrink = Object.fromEntries(products.map(p => [p.id, p.fields['Order Category'] === 'Drink']));
+  function lastCompletedWeekRange(today) {
+    const daysSinceMonday = (today.getDay() + 6) % 7;
+    const thisWeekMonday = addDays(today, -daysSinceMonday);
+    const lastWeekSunday = addDays(thisWeekMonday, -1);
+    const lastWeekMonday = addDays(lastWeekSunday, -6);
+    return { startStr: isoDate(lastWeekMonday), endStr: isoDate(lastWeekSunday) };
+  }
+  const { startStr: lastWeekStart, endStr: lastWeekEnd } = lastCompletedWeekRange(targetDate);
 
   const bomByMenuItem = {};
   for (const r of recipes) {
@@ -431,17 +450,38 @@ async function main() {
       avgUnitsSold[miId] = arr.reduce((a, b) => a + b, 0);
     }
 
+    // Drink category: last COMPLETED Monday-Sunday week's raw total (not
+    // yesterday's single day) — see the comment above productIsDrink.
+    const lastWeekSales = salesForLocation.filter(s => {
+      const d = s.fields['Date'];
+      return d && d >= lastWeekStart && d <= lastWeekEnd;
+    });
+    const weeklyUnitsSold = {};
+    for (const s of lastWeekSales) {
+      const units = Number(s.fields['Units sold']) || 0;
+      for (const miId of (s.fields['Menu Item'] || [])) {
+        weeklyUnitsSold[miId] = (weeklyUnitsSold[miId] || 0) + units;
+      }
+    }
+
     const avgConsumption = {};
-    for (const [miId, avgUnits] of Object.entries(avgUnitsSold)) {
-      const bom = bomByMenuItem[miId];
-      if (!bom) continue;
+    const weeklyConsumption = {};
+    for (const [miId, bom] of Object.entries(bomByMenuItem)) {
       for (const { productId, qtyPerUnit, bomUnit } of bom) {
         const converted = convertQty(qtyPerUnit, bomUnit, productUnitById[productId], productId);
         if (converted === null) {
           console.log(`Skipping ${productId}: no reliable conversion from "${bomUnit}" to "${productUnitById[productId]}" (missing pack size?)`);
           continue;
         }
-        avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
+        if (productIsDrink[productId]) {
+          const weekUnits = weeklyUnitsSold[miId];
+          if (!weekUnits) continue;
+          weeklyConsumption[productId] = (weeklyConsumption[productId] || 0) + weekUnits * converted;
+        } else {
+          const avgUnits = avgUnitsSold[miId];
+          if (!avgUnits) continue;
+          avgConsumption[productId] = (avgConsumption[productId] || 0) + avgUnits * converted;
+        }
       }
     }
 
@@ -450,6 +490,11 @@ async function main() {
       const par = avg * daysToCover * BUFFER_MULTIPLIER;
       const stock = currentStock(productId, locationId);
       const qty = Math.max(0, Math.ceil(par - stock));
+      if (qty > 0) restaurantResult[productId] = qty;
+    }
+    for (const [productId, weekTotal] of Object.entries(weeklyConsumption)) {
+      const stock = currentStock(productId, locationId);
+      const qty = Math.max(0, Math.ceil(2 * weekTotal - stock));
       if (qty > 0) restaurantResult[productId] = qty;
     }
     results[restaurantName] = restaurantResult;
