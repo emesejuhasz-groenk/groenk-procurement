@@ -191,6 +191,35 @@ const BULK_LITER_PRODUCTS = {
   'recwIdBFCutoKf1ud': 9, // Metro Chef Leche Entera 1.5L (6 UD) — 6 x 1.5L = 9L per box
 };
 const KEG_PRODUCTS = { 'recg4kyyl1P4ionxe': 30 };
+// ADDED 2026-09-18 (confirmed with Emese): a standing safety-stock floor for
+// specific wines/spirits, in the product's own stocking unit (box/caja or
+// unit). These items sell slowly enough that a quiet week can make the normal
+// "2 x last week's sales" formula say 0 even with nothing physically left (the
+// Obalo incident) — this floor makes sure the order never drops below a
+// sensible base level regardless of recent sales. Only applies to the Drink
+// products listed here; everything else keeps using the plain weekly formula.
+const MINIMUM_STOCK_UNITS = {
+  'rec0GG6FuoGVhppOX': 2,      // Cruz De Alba Tinto Roble — 2 caja
+  'rectHW7Se1XBPFbF7': 2,      // Obalo Rosado — 2 caja
+  'recOur09D12vya1TO': 2,      // Paco&Lola Albarino Blanco — 2 caja
+  'recr5eRYcQ9DjtF8N': 2,      // K Naia Verdejo-Sauvig Blanc — 2 caja
+  'recbmyjGTpXCAgRdf': 2,      // Macia Batle 1856 Negre — 2 caja
+  'recqcp3W6BLYP7HLz': 2,      // Mucho Más red wine — 2 caja
+  'recfaXavJa7Mfn95b': 2,      // Groenk La Isla Bonita Wine — 2 caja
+  'recFkhzAQHnJQFOv6': 2,      // Can Gelat White — 2 caja
+  'recvWB7SPBW8yCbyw': 2,      // Can Gelat Gran Vi Red — 2 caja
+  'rec5lgdtonSCCuXKn': 1,      // Roda I Reserva — 1 caja
+  'recLnrqeL5oKywzpO': 3 / 6,  // Lanson champagne — 3 bottles (6/box)
+  'recO3hYm1bTCEbHwE': 3 / 6,  // André Clouet Brut Gran Reserva — 3 bottles (6/box)
+  'recTGua3HEngFSkYa': 1,      // Ron Diplomatico — 1 bottle (unit)
+  'recUriSKeofDsx7kv': 1,      // Vodka Grey Goose — 1 bottle (unit)
+  'recA0GesDatR3B7ry': 1,      // Glenfiddich whisky — 1 bottle (unit)
+  'recdqGIw0Ou0Gy5GV': 1,      // Suau 15ys brandy — 1 bottle (unit)
+  'recYff3VN3LLhBP3R': 1,      // Pampelle Aperitif — 1 caja
+  'recJVtCM5aKx3fkUs': 1,      // Amargero — 1 caja
+  'recLWTdCvXT0VPUoV': 4 / 12, // Taroncello — 4 bottles (12/box)
+  // Can Gelat Rosé intentionally excluded — sold out, not being reordered.
+};
 // Spirits poured by the cl/ml (BOM records the shot size) but ORDERED as whole bottles
 // (Product Unit = "unit"). Added 2026-08-31 — these fell through convertQty as
 // "unreliable" once order suggestions started looking at more than one day of sales.
@@ -669,8 +698,17 @@ function NewOrderScreen({ user, api }) {
       const qty = Math.max(0, Math.ceil(par - currentStock(productId)));
       if (qty > 0) result[productId] = qty;
     }
+    // Make sure every product with a minimum-stock floor gets checked even if
+    // it had zero sales last week (otherwise it would never enter
+    // weeklyConsumption at all, and the floor below would never apply — this
+    // is exactly the Obalo bug this floor exists to fix).
+    for (const productId of Object.keys(MINIMUM_STOCK_UNITS)) {
+      if (!(productId in weeklyConsumption)) weeklyConsumption[productId] = 0;
+    }
     for (const [productId, weekTotal] of Object.entries(weeklyConsumption)) {
-      const qty = Math.max(0, Math.ceil(2 * weekTotal - currentStock(productId)));
+      const stock = currentStock(productId);
+      const minimum = MINIMUM_STOCK_UNITS[productId] || 0;
+      const qty = Math.max(0, Math.ceil(Math.max(2 * weekTotal, minimum) - stock));
       if (qty > 0) result[productId] = qty;
     }
     return { result, unreliableCount: unreliableProducts.size };
@@ -1382,6 +1420,22 @@ function InventoryScreen({ user, api }) {
   function currentStock(productId, clamp = true) {
     return computeCurrentStock(txns, productId, locationId, clamp);
   }
+  // ADDED 2026-09-18 (requested by Emese): surface how stale each product's
+  // physical count is, right on the row, and default-sort so the most
+  // overdue items float to the top — the Cruz de Alba/Obalo incidents both
+  // came from a count that quietly went 9-14 days without anyone noticing it
+  // was overdue. Returns { days: number|null, label: string } — days is null
+  // for a product that has never been counted at all (shown as most urgent).
+  function lastCountDaysAgo(productId) {
+    const relevant = txns.filter(t => (t.fields['Related Product'] || []).includes(productId) && (t.fields['Location'] || []).includes(locationId));
+    let lastCount = null;
+    for (const t of relevant) {
+      if (IS_MANUAL_COUNT(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
+    }
+    if (!lastCount) return { days: null, label: 'Never counted' };
+    const days = Math.floor((Date.now() - new Date(lastCount.createdTime).getTime()) / 86400000);
+    return { days, label: days === 0 ? 'Updated today' : days === 1 ? 'Updated 1 day ago' : `Updated ${days} days ago` };
+  }
 
   async function saveCount(productId) {
     const val = counts[productId];
@@ -1432,10 +1486,20 @@ function InventoryScreen({ user, api }) {
         const ps = products.filter(p => (p.fields['Supplier'] || []).includes(s.id));
         if (!ps.length) return null;
         const hasCategories = ps.some(p => p.fields['Order Category']);
-        const byName = (a, b) => (a.fields['Name'] || '').trim().localeCompare((b.fields['Name'] || '').trim());
+        // CHANGED 2026-09-18: default sort is now by staleness (most overdue —
+        // or never counted at all — first), not alphabetical, so the most
+        // urgent items are what you see first when the screen opens.
+        const byStaleness = (a, b) => {
+          const da = lastCountDaysAgo(a.id).days;
+          const db = lastCountDaysAgo(b.id).days;
+          if (da === null && db === null) return (a.fields['Name'] || '').trim().localeCompare((b.fields['Name'] || '').trim());
+          if (da === null) return -1;
+          if (db === null) return 1;
+          return db - da;
+        };
         const groups = hasCategories
-          ? CATEGORY_ORDER.map(cat => ({ cat, items: ps.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byName) })).filter(g => g.items.length)
-          : [{ cat: null, items: [...ps].sort(byName) }];
+          ? CATEGORY_ORDER.map(cat => ({ cat, items: ps.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byStaleness) })).filter(g => g.items.length)
+          : [{ cat: null, items: [...ps].sort(byStaleness) }];
         return (
           <div key={s.id} style={{ marginBottom: 20 }}>
             <div className="section-label" style={{ marginBottom: 6 }}>{s.fields['Name']}</div>
@@ -1452,11 +1516,14 @@ function InventoryScreen({ user, api }) {
                   const override = INVENTORY_COUNT_OVERRIDE[p.id];
                   const displayUnit = override ? override.countUnit : p.fields['Unit'];
                   const displayStock = Math.round((override ? stock * override.countsPerStockUnit : stock) * 100) / 100;
+                  const { days: staleDays, label: staleLabel } = lastCountDaysAgo(p.id);
+                  const staleColor = staleDays === null || staleDays >= 7 ? 'var(--danger, #c0392b)' : staleDays >= 3 ? 'var(--warning, #b8860b)' : 'var(--text-muted)';
                   return (
                     <div key={p.id} className="product-row">
                       <div>
                         <div className="product-name">{p.fields['Name']}</div>
                         <div className="product-unit">{displayUnit} · in stock: {displayStock}</div>
+                        <div className="product-unit" style={{ color: staleColor, fontWeight: staleDays === null || staleDays >= 7 ? 700 : 400 }}>{staleLabel}</div>
                       </div>
                       <div className="qty-controls">
                         {editing ? (
