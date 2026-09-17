@@ -1393,7 +1393,16 @@ function InventoryScreen({ user, api }) {
     if (delta === 0) { setCounts(c => { const n = { ...c }; delete n[productId]; return n; }); return; }
     setSaving(productId);
     try {
-      await api.create('Inventory Transactions', {
+      // CHANGED 2026-09-18 (real slowness reported by Emese): this used to
+      // re-fetch the ENTIRE Inventory Transactions table after every single
+      // save (api.getAll — paginated, dozens of round-trips once the table grew
+      // to months of history) just to show one new row. api.create already
+      // returns the full created record (id, createdTime, fields) — appending
+      // it to the existing txns state locally gives the same correct result
+      // instantly, with zero extra network calls. Every screen's own
+      // computeCurrentStock/currentStock already recomputes from whatever's in
+      // txns, so this is exactly as correct as a full reload, just immediate.
+      const created = await api.create('Inventory Transactions', {
         'Date': new Date().toISOString().slice(0,10),
         'Type': 'Manual Adjustment',
         'Quantity': delta,
@@ -1402,8 +1411,7 @@ function InventoryScreen({ user, api }) {
         'Transaction Added By': user.name,
         'Notes': override ? `Manual count (${enteredCount} ${override.countUnit})` : 'Manual count',
       });
-      const t2 = await api.getAll('Inventory Transactions');
-      setTxns(t2);
+      setTxns(t => [...t, created]);
       setCounts(c => { const n = { ...c }; delete n[productId]; return n; });
     } catch(e) { alert('Error: ' + e.message); }
     finally { setSaving(null); }
