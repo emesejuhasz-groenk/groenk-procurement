@@ -299,6 +299,17 @@ async function main() {
   const KEG_PRODUCTS = {
     'recg4kyyl1P4ionxe': 30,
   };
+  // ADDED 2026-09-18 (confirmed with Emese) — see index.html for the full
+  // explanation; kept in sync between both files.
+  const MINIMUM_STOCK_UNITS = {
+    'rec0GG6FuoGVhppOX': 2, 'rectHW7Se1XBPFbF7': 2, 'recOur09D12vya1TO': 2,
+    'recr5eRYcQ9DjtF8N': 2, 'recbmyjGTpXCAgRdf': 2, 'recqcp3W6BLYP7HLz': 2,
+    'recfaXavJa7Mfn95b': 2, 'recFkhzAQHnJQFOv6': 2, 'recvWB7SPBW8yCbyw': 2,
+    'rec5lgdtonSCCuXKn': 1, 'recLnrqeL5oKywzpO': 3 / 6, 'recO3hYm1bTCEbHwE': 3 / 6,
+    'recTGua3HEngFSkYa': 1, 'recUriSKeofDsx7kv': 1, 'recA0GesDatR3B7ry': 1,
+    'recdqGIw0Ou0Gy5GV': 1, 'recYff3VN3LLhBP3R': 1, 'recJVtCM5aKx3fkUs': 1,
+    'recLWTdCvXT0VPUoV': 4 / 12,
+  };
 
   function convertQty(qty, fromUnit, toUnit, productId) {
     const f = String(fromUnit || '').toLowerCase().trim();
@@ -492,9 +503,17 @@ async function main() {
       const qty = Math.max(0, Math.ceil(par - stock));
       if (qty > 0) restaurantResult[productId] = qty;
     }
+    // Make sure every product with a minimum-stock floor gets checked even if
+    // it had zero sales last week (otherwise it would never enter
+    // weeklyConsumption at all, and the floor would never apply — this is
+    // exactly the Obalo bug this floor exists to fix).
+    for (const productId of Object.keys(MINIMUM_STOCK_UNITS)) {
+      if (!(productId in weeklyConsumption)) weeklyConsumption[productId] = 0;
+    }
     for (const [productId, weekTotal] of Object.entries(weeklyConsumption)) {
       const stock = currentStock(productId, locationId);
-      const qty = Math.max(0, Math.ceil(2 * weekTotal - stock));
+      const minimum = MINIMUM_STOCK_UNITS[productId] || 0;
+      const qty = Math.max(0, Math.ceil(Math.max(2 * weekTotal, minimum) - stock));
       if (qty > 0) restaurantResult[productId] = qty;
     }
     results[restaurantName] = restaurantResult;
