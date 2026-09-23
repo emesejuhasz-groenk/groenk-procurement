@@ -507,7 +507,10 @@ async function main() {
     // it had zero sales last week (otherwise it would never enter
     // weeklyConsumption at all, and the floor would never apply — this is
     // exactly the Obalo bug this floor exists to fix).
+    // FIX 2026-09-23: only products of THIS supplier may get a minimum-stock
+    // floor here — otherwise Tunel wines/spirits leak into other suppliers' orders.
     for (const productId of Object.keys(MINIMUM_STOCK_UNITS)) {
+      if (!pkProductIds.has(productId)) continue;
       if (!(productId in weeklyConsumption)) weeklyConsumption[productId] = 0;
     }
     for (const [productId, weekTotal] of Object.entries(weeklyConsumption)) {
