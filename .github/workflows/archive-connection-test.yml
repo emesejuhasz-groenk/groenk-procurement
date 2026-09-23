@@ -1,0 +1,56 @@
+name: Archive Connection Test
+# One-off test (ADDED 2026-09-23): checks that GitHub can reach the Apps Script
+# web app with the stored secrets — upload, find, download, byte-for-byte and
+# checksum comparison. Touches nothing in Airtable. Leaves one small file named
+# TEST_archive-connection.csv in the Drive folder, which can be deleted by hand.
+# This workflow file can be deleted after a successful run.
+on:
+  workflow_dispatch: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Test Apps Script connection
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
+        run: |
+          cat > test.js <<'JS'
+          const crypto = require('crypto');
+          const URL_ = process.env.APPS_SCRIPT_URL, SECRET = process.env.APPS_SCRIPT_SECRET;
+          if (!URL_ || !SECRET) { console.error('FAIL: APPS_SCRIPT_URL or APPS_SCRIPT_SECRET secret is missing.'); process.exit(1); }
+          async function call(p, secret = SECRET) {
+            const r = await fetch(URL_, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ ...p, secret }), redirect: 'follow' });
+            const t = await r.text();
+            try { return JSON.parse(t); } catch (e) { throw new Error(`Non-JSON response (HTTP ${r.status}) — usually wrong URL or web app access not set to "Anyone": ${t.slice(0, 300)}`); }
+          }
+          (async () => {
+            const wrong = await call({ action: 'find', name: 'x' }, 'wrong-secret');
+            if (wrong.ok !== false || wrong.error !== 'unauthorized') throw new Error('Wrong secret was NOT rejected: ' + JSON.stringify(wrong));
+            console.log('OK  wrong secret is rejected');
+            const name = 'TEST_archive-connection.csv';
+            const csv = '\uFEFFDate,Location,Menu Item,Units sold\r\n2026-09-23,Deià,"Test, ""archive""",1\r\n';
+            const bytes = Buffer.from(csv, 'utf8');
+            const found0 = await call({ action: 'find', name });
+            if (!found0.ok) throw new Error('find failed: ' + found0.error);
+            const up = await call({ action: 'upload', name, existingId: found0.file ? found0.file.id : null, contentBase64: bytes.toString('base64') });
+            if (!up.ok) throw new Error('upload failed: ' + up.error);
+            console.log('OK  uploaded to Drive:', up.file.id);
+            const found = await call({ action: 'find', name });
+            if (!found.ok || !found.file) throw new Error('uploaded file not found in folder');
+            console.log('OK  file found in the Daily Sales CSV folder');
+            const dl = await call({ action: 'download', id: up.file.id });
+            if (!dl.ok) throw new Error('download failed: ' + dl.error);
+            const back = Buffer.from(dl.contentBase64, 'base64');
+            if (!back.equals(bytes)) throw new Error('downloaded content differs from uploaded content');
+            console.log('OK  downloaded content identical, byte for byte');
+            const md5 = crypto.createHash('md5').update(bytes).digest('hex');
+            if (up.file.md5Checksum !== md5) throw new Error(`checksum mismatch: drive ${up.file.md5Checksum} vs local ${md5}`);
+            console.log('OK  checksum matches:', md5);
+            console.log('\nALL CHECKS PASSED — the Monday archive can save and verify files in Drive.');
+          })().catch(e => { console.error('FAIL:', e.message); process.exit(1); });
+          JS
+          node test.js
