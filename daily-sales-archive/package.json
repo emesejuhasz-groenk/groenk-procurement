@@ -1,0 +1,10 @@
+{
+  "name": "daily-sales-archive",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Grøenk weekly Daily Sales archive: CSV to Google Drive (verified) + email to controlling, then delete from Airtable. Keeps only the last 4 completed weeks + the current week in Airtable.",
+  "main": "daily-sales-archive.js",
+  "scripts": {
+    "start": "node daily-sales-archive.js"
+  }
+}
