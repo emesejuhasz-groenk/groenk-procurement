@@ -1,5 +1,6 @@
 
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -157,6 +158,61 @@ const LOCATION_IDS = {
   'Fornalutx - Groenk Bistro': 'recyfcAwYYZgFzSyd',
   'Groenk Production Kitchen Fornalutx': 'recZespbXJli9GI4r', // Retail role
 };
+// ---------- Speed-up helpers (ADDED 2026-09-23) ----------
+// Airtable formulas see a linked record by its display name, not its ID, so the
+// server-side location filter matches on the Locations table's Name. Client-side
+// code still filters by ID exactly as before — the server filter only trims the
+// download. Both Production Kitchen location records share the name
+// "Production Kitchen", which is harmless for the same reason.
+const LOCATION_NAMES = {
+  'reckUG4DXrJTMYtte': 'Sóller Pizza',
+  'recnoXjgMS7jPYgE7': 'Deià',
+  'recyfcAwYYZgFzSyd': 'Fornalutx',
+  'recZespbXJli9GI4r': 'Production Kitchen',
+};
+const LOCATION_FORMULA = (locationId) => {
+  const name = LOCATION_NAMES[locationId];
+  return name ? `FIND('|${name}|', '|' & ARRAYJOIN({Location}, '|') & '|')` : null;
+};
+// Date of the full physical inventory that serves as the stock baseline.
+const BASELINE_INVENTORY_DATE = '2026-09-21';
+const STOCK_TXN_FIELDS = ['Related Product', 'Location', 'Type', 'Quantity', 'Date', 'Notes'];
+const SALES_FIELDS = ['Date', 'Units sold', 'Location', 'Menu Item'];
+// Every sales-based formula in the app looks back at most 14 days (7-day average,
+// last completed Mon-Sun week, PK "most recent day"), so 16 days is a safe window.
+const SALES_WINDOW_FORMULA = `IS_AFTER({Date}, DATEADD(TODAY(), -16, 'days'))`;
+const andFormula = (...parts) => { const p = parts.filter(Boolean); return p.length ? (p.length === 1 ? p[0] : `AND(${p.join(',')})`) : undefined; };
+
+// Inventory Transactions for one location (or several), only the columns stock
+// maths needs. Safety net: if the name-based filter ever returns nothing (e.g. a
+// location gets renamed in Airtable), fall back to the full table rather than
+// silently showing zero stock everywhere.
+async function loadStockTxns(api, locationIds) {
+  const parts = (locationIds || []).map(LOCATION_FORMULA).filter(Boolean);
+  if (parts.length && parts.length === (locationIds || []).length) {
+    const filter = parts.length === 1 ? parts[0] : `OR(${parts.join(',')})`;
+    const rows = await api.getAll('Inventory Transactions', { filter, fields: STOCK_TXN_FIELDS });
+    if (rows.length) return rows;
+  }
+  return api.getAll('Inventory Transactions', { fields: STOCK_TXN_FIELDS });
+}
+async function loadRecentSales(api, locationId) {
+  const locFilter = locationId ? LOCATION_FORMULA(locationId) : null;
+  if (locFilter) {
+    const rows = await api.getAll('Daily Sales', { filter: andFormula(SALES_WINDOW_FORMULA, locFilter), fields: SALES_FIELDS });
+    if (rows.length) return rows;
+  }
+  // Same safety net as loadStockTxns: never let a name mismatch hide all sales.
+  return api.getAll('Daily Sales', { filter: SALES_WINDOW_FORMULA, fields: SALES_FIELDS });
+}
+// Orders matching a formula + only their own Order Items.
+async function loadOrdersWithItems(api, filter) {
+  const orders = await api.getAll('Orders', { filter });
+  const itemIds = orders.flatMap(o => o.fields['Order items'] || []);
+  const items = await api.getByIds('Order Items', itemIds);
+  return { orders, items };
+}
+
 const PRODUCTION_KITCHEN_PRODUCTION_ROLE_ID = 'recdj6jH7StWpJYum'; // Production role — for the T+2 auto-order feature
 const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
 const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Staff Food', 'Other'];
@@ -363,16 +419,60 @@ const REST_COLORS = {
 function airtable(token, baseId) {
   const base = `https://api.airtable.com/v0/${baseId || BASE_ID}`;
   const h = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-  async function getAll(table) {
+  // CHANGED 2026-09-23 (speed-up): getAll used to download EVERY row of a table,
+  // 100 at a time, one request after another (Daily Sales ~9.7k rows, Inventory
+  // Transactions ~7.9k, Order Items ~6.7k => hundreds of sequential requests per
+  // screen). It now accepts optional server-side filtering so each screen only
+  // downloads what it actually uses:
+  //   opts.filter  -> Airtable filterByFormula
+  //   opts.fields  -> only these columns (smaller payload)
+  //   opts.sort    -> [{ field, direction }]
+  //   opts.max     -> maxRecords
+  // Airtable's 5 requests/second limit is also handled now: a 429 waits and retries
+  // instead of failing the whole screen.
+  async function fetchWithRetry(url, options) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const r = await fetch(url, options);
+      if (r.status !== 429) return r;
+      await new Promise(res => setTimeout(res, 1000 * (attempt + 1)));
+    }
+    return fetch(url, options);
+  }
+  async function getAll(table, opts = {}) {
     let records = [], offset = null;
     do {
-      const url = `${base}/${encodeURIComponent(table)}?pageSize=100${offset ? '&offset=' + offset : ''}`;
-      const r = await fetch(url, { headers: h });
+      const params = new URLSearchParams({ pageSize: '100' });
+      if (opts.filter) params.set('filterByFormula', opts.filter);
+      (opts.fields || []).forEach(f => params.append('fields[]', f));
+      (opts.sort || []).forEach((srt, i) => {
+        params.set(`sort[${i}][field]`, srt.field);
+        params.set(`sort[${i}][direction]`, srt.direction || 'asc');
+      });
+      if (opts.max) params.set('maxRecords', String(opts.max));
+      if (offset) params.set('offset', offset);
+      const r = await fetchWithRetry(`${base}/${encodeURIComponent(table)}?${params.toString()}`, { headers: h });
       const d = await r.json();
-      if (d.error) throw new Error(d.error.message);
+      if (d.error) throw new Error(d.error.message || d.error.type || String(d.error));
       records = records.concat(d.records); offset = d.offset;
     } while (offset);
     return records;
+  }
+  // Fetch specific records by ID (e.g. only the Order Items of the orders on
+  // screen, instead of all ~6.7k). Chunked to keep the URL short; a few chunks
+  // run in parallel.
+  async function getByIds(table, ids, opts = {}) {
+    const unique = [...new Set(ids || [])];
+    if (!unique.length) return [];
+    const chunks = [];
+    for (let i = 0; i < unique.length; i += 40) chunks.push(unique.slice(i, i + 40));
+    const out = [];
+    for (let i = 0; i < chunks.length; i += 3) {
+      const batch = await Promise.all(chunks.slice(i, i + 3).map(c =>
+        getAll(table, { ...opts, filter: `OR(${c.map(id => `RECORD_ID()='${id}'`).join(',')})` })
+      ));
+      batch.forEach(b => out.push(...b));
+    }
+    return out;
   }
   async function create(table, fields) {
     const r = await fetch(`${base}/${encodeURIComponent(table)}`, { method: 'POST', headers: h, body: JSON.stringify({ records: [{ fields }] }) });
@@ -398,7 +498,7 @@ function airtable(token, baseId) {
     }
     return results;
   }
-  return { getAll, create, update, createMany };
+  return { getAll, getByIds, create, update, createMany };
 }
 
 function Badge({ children, color }) {
@@ -564,9 +664,10 @@ function NewOrderScreen({ user, api }) {
   useEffect(() => {
     async function load() {
       try {
+        const locId = LOCATION_IDS[user.restaurant];
         const [sups, prods, bom, sales, txns] = await Promise.all([
           api.getAll('Suppliers'), api.getAll('Products'), api.getAll('Recipes (BOM)'),
-          api.getAll('Daily Sales'), api.getAll('Inventory Transactions'),
+          loadRecentSales(api, locId), loadStockTxns(api, locId ? [locId] : null),
         ]);
         setSuppliers(sups);
         setProducts(prods.filter(p => p.fields['Active'] !== false));
@@ -863,8 +964,12 @@ function PendingOrdersScreen({ user, api }) {
   useEffect(() => {
     async function load() {
       try {
-        const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
-        let scoped = o.filter(x => x.fields['Status'] !== 'Closed');
+        // CHANGED 2026-09-23: only orders not yet delivered (Delivered ones are
+        // handled on the Invoice screen) and only their own items.
+        const [{ orders: o, items: i }, s, p] = await Promise.all([
+          loadOrdersWithItems(api, `AND({Status} != 'Closed', {Status} != 'Delivered')`), api.getAll('Suppliers'), api.getAll('Products'),
+        ]);
+        let scoped = o.filter(x => x.fields['Status'] !== 'Closed' && x.fields['Status'] !== 'Delivered');
         if (user.role === 'kitchen') scoped = scoped.filter(x => x.fields['Restaurant'] === user.restaurant);
         setOrders(scoped.sort((a,b) => (b.fields['Order Date'] || '').localeCompare(a.fields['Order Date'] || '')));
         setSuppliers(s); setItems(i); setProducts(p);
@@ -908,8 +1013,9 @@ function PendingOrdersScreen({ user, api }) {
           'Order': [orderId], 'Product': [l.productId], 'Quantity': Number(l.qty), 'Received': false, 'Invoice Match': 'Pending Review'
         })));
       }
-      const [i2] = await Promise.all([api.getAll('Order Items')]);
-      setItems(i2);
+      const [refreshed] = await api.getByIds('Orders', [orderId]);
+      const freshItems = await api.getByIds('Order Items', (refreshed && refreshed.fields['Order items']) || []);
+      setItems(prev => [...prev.filter(it => !(it.fields['Order'] || []).includes(orderId)), ...freshItems]);
       setEdits(e => { const n = { ...e }; oItems.forEach(it => delete n[it.id]); return n; });
       setNewLines(nl => ({ ...nl, [orderId]: [] }));
       setAddingTo(null);
@@ -1029,7 +1135,9 @@ function DeliveryScreen({ user, api }) {
   useEffect(() => {
     async function load() {
       try {
-        const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
+        const [{ orders: o, items: i }, s, p] = await Promise.all([
+          loadOrdersWithItems(api, `{Status} = 'Pending'`), api.getAll('Suppliers'), api.getAll('Products'),
+        ]);
         let pending = o.filter(x => x.fields['Status'] === 'Pending');
         if (user.role === 'kitchen') pending = pending.filter(x => x.fields['Restaurant'] === user.restaurant);
         setOrders(pending); setSuppliers(s); setAllItems(i); setProducts(p);
@@ -1176,15 +1284,29 @@ function InvoiceScreen({ api }) {
   useEffect(() => {
     async function load() {
       try {
-        const [o, s, i, p] = await Promise.all([api.getAll('Orders'), api.getAll('Suppliers'), api.getAll('Order Items'), api.getAll('Products')]);
+        const [o, s, p] = await Promise.all([api.getAll('Orders', { filter: `{Status} = 'Delivered'` }), api.getAll('Suppliers'), api.getAll('Products')]);
         const delivered = o.filter(x => x.fields['Status'] === 'Delivered');
-        setOrders(delivered); setSuppliers(s); setAllItems(i); setProducts(p);
+        setOrders(delivered); setSuppliers(s); setProducts(p);
         if (delivered.length) setSelected(delivered[0].id);
       } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
     }
     load();
   }, []);
+
+  // ADDED 2026-09-23: fetch the items of the selected order on demand instead of
+  // downloading every Order Item up front.
+  useEffect(() => {
+    const ord = orders.find(o => o.id === selected);
+    if (!ord) return;
+    const ids = ord.fields['Order items'] || [];
+    if (ids.every(id => allItems.some(it => it.id === id))) return;
+    let cancelled = false;
+    api.getByIds('Order Items', ids).then(fetched => {
+      if (!cancelled) setAllItems(prev => [...prev.filter(it => !ids.includes(it.id)), ...fetched]);
+    }).catch(e => alert('Error: ' + e.message));
+    return () => { cancelled = true; };
+  }, [selected, orders]);
 
   const order = orders.find(o => o.id === selected);
   const sup = order ? suppliers.find(s => s.id === (order.fields['Supplier'] || [])[0]) : null;
@@ -1411,14 +1533,17 @@ function InventoryScreen({ user, api }) {
   async function load() {
     setLoading(true);
     try {
-      const [p, s, t] = await Promise.all([api.getAll('Products'), api.getAll('Suppliers'), api.getAll('Inventory Transactions')]);
+      const locId = LOCATION_IDS[location];
+      const [p, s, t] = await Promise.all([api.getAll('Products'), api.getAll('Suppliers'), loadStockTxns(api, locId ? [locId] : null)]);
       setProducts(p.filter(x => x.fields['Active'] !== false));
       setSuppliers(s);
       setTxns(t);
     } catch(e) { alert('Error: ' + e.message); }
     finally { setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  // CHANGED 2026-09-23: loads only the selected location's transactions, so
+  // switching location reloads.
+  useEffect(() => { load(); }, [location]);
 
   const locationId = LOCATION_IDS[location];
   function currentStock(productId, clamp = true) {
@@ -1436,7 +1561,10 @@ function InventoryScreen({ user, api }) {
     for (const t of relevant) {
       if (IS_MANUAL_COUNT(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
     }
-    if (!lastCount) return { days: null, label: 'Never counted' };
+    // CHANGED 2026-09-23 (Emese): the Monday 2026-09-21 full count is the stock
+    // baseline. Anything with no physical count since then has no trustworthy
+    // stock figure, so it is flagged loudly (red, sorted to the top).
+    if (!lastCount || (lastCount.createdTime || '').slice(0, 10) < BASELINE_INVENTORY_DATE) return { days: null, label: 'NO INVENTORY' };
     const days = Math.floor((Date.now() - new Date(lastCount.createdTime).getTime()) / 86400000);
     return { days, label: days === 0 ? 'Updated today' : days === 1 ? 'Updated 1 day ago' : `Updated ${days} days ago` };
   }
@@ -1575,7 +1703,11 @@ function WasteScreen({ user, api }) {
   async function load() {
     try {
       const [p, s, t, mi, bom] = await Promise.all([
-        api.getAll('Products'), api.getAll('Suppliers'), api.getAll('Inventory Transactions'),
+        api.getAll('Products'), api.getAll('Suppliers'),
+        api.getAll('Inventory Transactions', {
+          filter: andFormula(`{Type} = 'Waste'`, LOCATION_FORMULA(LOCATION_IDS[user.restaurant])),
+          sort: [{ field: 'Date', direction: 'desc' }], max: 8,
+        }),
         api.getAll('Menu Items'), api.getAll('Recipes (BOM)'),
       ]);
       const active = p.filter(x => x.fields['Active'] !== false);
@@ -1926,10 +2058,14 @@ function PrepScreen({ user, api }) {
 
   async function loadAll() {
     setLoading(true);
-    const [p, r, ds, it, ords, ordItems] = await Promise.all([
-      api.getAll('Products'), api.getAll('Recipes (BOM)'), api.getAll('Daily Sales'),
-      api.getAll('Inventory Transactions'), api.getAll('Orders'), api.getAll('Order Items'),
+    // CHANGED 2026-09-23: 16 days of sales, only the 3 restaurants' stock rows,
+    // and only recent orders with their own items.
+    const restaurantLocIds = ['Soller - Groenk Pizza', 'Deia - Groenk Bistro', 'Fornalutx - Groenk Bistro'].map(n => LOCATION_IDS[n]);
+    const [p, r, ds, it, ordData] = await Promise.all([
+      api.getAll('Products'), api.getAll('Recipes (BOM)'), loadRecentSales(api, null),
+      loadStockTxns(api, restaurantLocIds), loadOrdersWithItems(api, `IS_AFTER({Order Date}, DATEADD(TODAY(), -4, 'days'))`),
     ]);
+    const ords = ordData.orders, ordItems = ordData.items;
     setProducts(p); setRecipes(r); setDailySales(ds); setInvTxns(it);
     setExistingOrders(ords); setExistingOrderItems(ordItems);
     setLoading(false);
