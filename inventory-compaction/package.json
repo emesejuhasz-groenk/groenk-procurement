@@ -1,0 +1,8 @@
+{
+  "name": "inventory-compaction",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-off: archive Inventory Transactions older than the 2026-09-21 inventory baseline and replace them with opening balances, keeping every computed stock level identical.",
+  "main": "inventory-compaction.js",
+  "scripts": { "start": "node inventory-compaction.js" }
+}
