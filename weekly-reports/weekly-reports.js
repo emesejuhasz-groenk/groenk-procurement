@@ -547,8 +547,16 @@ async function buildPkConsumptionReport(dailySales, products, recipes, invTxns, 
 async function main() {
   const today = new Date();
   const { start: lastWeekStart, end: lastWeekEnd } = lastCompletedWeek(today);
-  const weeks = weeksBetween(new Date(HISTORY_START_DATE), lastWeekEnd);
-  console.log(`Last completed week: ${isoDate(lastWeekStart)} to ${isoDate(lastWeekEnd)}. History report covers ${weeks.length} week(s) from ${HISTORY_START_DATE}.`);
+  // CHANGED 2026-09-23 (Daily Sales archive): Airtable now keeps only the last
+  // 4 completed weeks — older weeks are archived as weekly CSVs in the controlling
+  // Drive folder "Daily Sales CSV" and deleted from Airtable by
+  // daily-sales-archive.js. So this report is now a rolling 4-week window
+  // (weeks older than that would only show zeros).
+  const REPORT_WEEKS = 4;
+  const rollingStart = addDays(lastWeekStart, -7 * (REPORT_WEEKS - 1));
+  const historyStart = rollingStart > new Date(HISTORY_START_DATE) ? rollingStart : new Date(HISTORY_START_DATE);
+  const weeks = weeksBetween(historyStart, lastWeekEnd);
+  console.log(`Last completed week: ${isoDate(lastWeekStart)} to ${isoDate(lastWeekEnd)}. History report covers ${weeks.length} week(s) from ${isoDate(historyStart)}.`);
 
   // Fetched one table at a time (not Promise.all) — see the comment on
   // airtableGetAll above for why: four large paginated fetches all at once against
@@ -592,7 +600,7 @@ async function main() {
   await sendResendEmail({
     to: CONTROLLING_EMAIL,
     subject: `${gapSubjectPrefix}Heti eladási riport kategóriánként — ${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)} zárva`,
-    text: gapWarningText + `Csatolva a teljes heti eladási bontás, kategóriánként és éttermenként (Deià / Fornalutx / Sóller Pizza + Total), ${HISTORY_START_DATE}-tól a most lezárt hétig (${isoDate(lastWeekStart)} – ${isoDate(lastWeekEnd)}).`,
+    text: gapWarningText + `Csatolva a teljes heti eladási bontás, kategóriánként és éttermenként (Deià / Fornalutx / Sóller Pizza + Total), az utolsó ${weeks.length} lezárt hétre (${isoDate(weeks[0].start)} – ${isoDate(lastWeekEnd)}). A korábbi hetek heti CSV-ként a controlling Drive "Daily Sales CSV" mappájában vannak.`,
     attachments: [{ filename: `heti-eladas-kategoriankent-${isoDate(lastWeekEnd)}.xlsx`, content: Buffer.from(salesBuffer).toString('base64') }],
   });
 
