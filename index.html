@@ -1,6 +1,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -216,7 +217,20 @@ async function loadOrdersWithItems(api, filter) {
 const PRODUCTION_KITCHEN_PRODUCTION_ROLE_ID = 'recdj6jH7StWpJYum'; // Production role — for the T+2 auto-order feature
 const PRODUCTION_KITCHEN_SUPPLIER_ID = 'recPXErB7VgvkYd6F'; // "Groenk Production Kitchen" in Suppliers table
 const WASTE_REASONS = ['Spoiled', 'Expired', 'Broken', 'Overproduction', 'Staff Food', 'Other'];
-const CATEGORY_ORDER = ['Meat & Fish', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
+const CATEGORY_ORDER = ['Meat & Fish', 'Fruit&Vegetable', 'Sauce', 'Bakery, pastry, dessert', 'Extra topping', 'Drink', 'Other'];
+// FIX 2026-09-23 (real bug reported by the restaurants): the grouped product
+// lists only rendered categories listed in CATEGORY_ORDER. A product whose Order
+// Category was anything else (e.g. the "Fruit&Vegetable" option added in
+// Airtable) silently disappeared from the list — while its suggested quantity
+// still went into the order summary, so it could be ordered but not seen or
+// removed (Zanahoria mini at Frutas Daniel). This helper always shows every
+// category: known ones in CATEGORY_ORDER, any other ones after them.
+function categoryGroups(items, sortFn) {
+  const catOf = p => p.fields['Order Category'] || 'Other';
+  const extra = [...new Set(items.map(catOf))].filter(c => !CATEGORY_ORDER.includes(c)).sort();
+  const order = [...CATEGORY_ORDER.filter(c => c !== 'Other'), ...extra, 'Other'];
+  return order.map(cat => ({ cat, items: items.filter(p => catOf(p) === cat).sort(sortFn) })).filter(g => g.items.length);
+}
 
 // ---------- Shared unit conversion (same logic as production-kitchen-order.js) ----------
 const WEIGHT_TO_GRAMS = { g: 1, gr: 1, gramm: 1, kg: 1000 };
@@ -883,7 +897,7 @@ function NewOrderScreen({ user, api }) {
             const hasCategories = filteredProducts.some(p => p.fields['Order Category']);
             const byName = (a, b) => (a.fields['Name'] || '').trim().localeCompare((b.fields['Name'] || '').trim());
             const groups = hasCategories
-              ? CATEGORY_ORDER.map(cat => ({ cat, items: filteredProducts.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byName) })).filter(g => g.items.length)
+              ? categoryGroups(filteredProducts, byName)
               : [{ cat: null, items: [...filteredProducts].sort(byName) }];
             return groups.map(g => (
               <div key={g.cat || 'all'}>
@@ -1630,7 +1644,7 @@ function InventoryScreen({ user, api }) {
           return db - da;
         };
         const groups = hasCategories
-          ? CATEGORY_ORDER.map(cat => ({ cat, items: ps.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byStaleness) })).filter(g => g.items.length)
+          ? categoryGroups(ps, byStaleness)
           : [{ cat: null, items: [...ps].sort(byStaleness) }];
         return (
           <div key={s.id} style={{ marginBottom: 20 }}>
@@ -2194,7 +2208,7 @@ function PrepScreen({ user, api }) {
   const hasCategories = restaurantProducts.some(p => p.fields['Order Category']);
   const byName = (a, b) => (a.fields['Name'] || '').trim().localeCompare((b.fields['Name'] || '').trim());
   const groupedProducts = hasCategories
-    ? CATEGORY_ORDER.map(cat => ({ cat, items: restaurantProducts.filter(p => (p.fields['Order Category'] || 'Other') === cat).sort(byName) })).filter(g => g.items.length)
+    ? categoryGroups(restaurantProducts, byName)
     : [{ cat: null, items: [...restaurantProducts].sort(byName) }];
 
   const alreadySentToday = !!existingOrderFor(activeRestaurant) && existingOrderFor(activeRestaurant).fields['Status'] !== 'Pending';
