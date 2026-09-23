@@ -1,0 +1,32 @@
+name: Inventory Compaction (one-off)
+# Manual only. Default is a DRY RUN: builds the plan, proves every stock level
+# stays identical, saves + verifies the archive CSV in Drive, emails the plan,
+# and changes NOTHING in Airtable. Choose dry_run = false for the real run
+# (refused between 01:00 and 08:00 UTC, the daily consumption window).
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = plan + archive + email only, change nothing'
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+jobs:
+  compact:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./inventory-compaction
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run compaction
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: npm start
