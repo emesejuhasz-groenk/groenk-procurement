@@ -1,0 +1,36 @@
+name: Daily Sales Weekly Archive
+on:
+  schedule:
+    # Monday 07:30 UTC = 09:30 Madrid (CEST) / 08:30 (CET): after the weekly
+    # reports (04:30 / 06:00 UTC) have read last week's data.
+    - cron: '30 7 * * 1'
+    # Safety-net tick (same GitHub quirk as the other workflows: a new schedule
+    # can skip its first window). The script is idempotent — if the week is
+    # already archived there is simply nothing to do.
+    - cron: '0 10 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = upload + verify + email, but delete NOTHING'
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./daily-sales-archive
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run archive
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+        run: npm start
