@@ -1,38 +1,32 @@
 /**
- * Grøenk — Inventory Transactions compaction (one-off, run by hand)
+ * Grøenk — Inventory Transactions weekly archive
  *
- * ADDED 2026-09-23 (requested by Emese). The Inventory Transactions ledger grows by
- * hundreds of rows a day and is the slowest thing the app loads. Everything dated
- * before the Monday 2026-09-21 physical inventory is history: it only matters
- * through the stock figure it adds up to. This script replaces that history with
- * the smallest set of rows that gives EXACTLY the same stock for every
- * product + location, using the exact ledger rules of the app / PK order /
- * daily consumption scripts:
+ * ADDED 2026-09-26 (requested by Emese). The ledger grows by ~250 rows a day
+ * and is the slowest thing the app loads. Every Monday this keeps the current
+ * week + the last 2 completed weeks as individual rows. Everything older only
+ * matters through the stock it adds up to, so per product + location it is
+ * collapsed into ONE "Opening balance" row with exactly the same effect, using
+ * the exact ledger rules of the app / PK order / daily consumption scripts.
  *
- *   Product+location WITH a physical count (the normal case):
- *     rows created before the latest count and dated before 2026-09-21 are
- *     deleted, and their total effect is folded into that count row's Quantity
- *     (its date, creator and time stamp stay the same, so "Updated X days ago"
- *     and NO INVENTORY are unaffected).
- *   Product+location with NO count ever:
- *     rows dated before 2026-09-21 are deleted and replaced by ONE
- *     "Opening balance" row with the same total (not a count, so it still shows
- *     NO INVENTORY).
+ * How (per product + location):
+ *   - WITH a physical count: rows created before the latest count and dated
+ *     before the cutoff are collapsed into one of those same rows (it keeps its
+ *     own time stamp, so it is still "before the count").
+ *   - With NO count: rows dated before the cutoff are collapsed the same way.
+ *   - Count rows that are the latest count are NEVER changed, nor is anything
+ *     dated on/after the cutoff. So "Updated X days ago", NO INVENTORY, the
+ *     Friday audit (last 7 days) and the Monday reports (last week) are untouched.
  *
  * Safety (never relaxed):
- *   1. Stock for every product+location is computed before, and on the planned
- *      result in memory. Any difference > 0.000001 => abort, nothing written.
- *   2. Every row to be deleted, and the original value of every row to be
- *      changed, goes to a CSV in the controlling Drive folder. It is downloaded
- *      back and verified (row count, every record ID, checksum) BEFORE any write.
- *   3. DRY_RUN=true (default for manual runs) stops after step 2 and emails the
- *      plan. Nothing in Airtable is touched.
- *   4. After a real run the whole ledger is re-read and every stock recomputed;
- *      any mismatch is emailed immediately with the details needed to repair it.
- *   Rows with several products or locations, or none, are never touched.
- *
- * Run it OUTSIDE the daily consumption window (01:00-08:00 UTC) and after the
- * Friday inventory audit, so that audit never sees the folded count rows.
+ *   1. Stock for every product+location computed before and on the planned
+ *      result; any difference > 0.000001 => abort, nothing written.
+ *   2. Every deleted row and the original + new values of every changed row go
+ *      to a CSV in the controlling Drive folder, downloaded back and verified
+ *      (bytes, checksum, every record ID) BEFORE any write.
+ *   3. After the run the whole ledger is re-read and every stock recomputed;
+ *      the result is emailed ("done ✅" or "check needed").
+ *   4. Refuses to write between 01:00 and 08:00 UTC (daily consumption window).
+ *   DRY_RUN=true: steps 1-2 + email only.
  *
  * Env: AIRTABLE_TOKEN, RESEND_API_KEY, APPS_SCRIPT_URL, APPS_SCRIPT_SECRET, DRY_RUN
  */
@@ -41,15 +35,20 @@ const crypto = require('crypto');
 
 const BASE_ID = 'appPcdy4HEJuDOF4j';
 const TABLE = 'Inventory Transactions';
-const CUTOFF = '2026-09-21';                 // first date KEPT as individual rows
-const OPENING_DATE = '2026-09-20';
-const ARCHIVE_NAME = `inventory-transactions_archive_before_${CUTOFF}.csv`;
+const RETENTION_WEEKS = 2;   // completed weeks kept as individual rows (+ current week)
+const TIME_ZONE = 'Europe/Madrid';
+const todayMadrid = () => new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const addDaysStr = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const mondayOf = d => addDaysStr(d, -((new Date(d + 'T00:00:00Z').getUTCDay() + 6) % 7));
+const TODAY = todayMadrid();
+const CUTOFF = process.env.CUTOFF_OVERRIDE || addDaysStr(mondayOf(TODAY), -7 * RETENTION_WEEKS); // first date KEPT
+const ARCHIVE_NAME = `inventory-transactions_archive_${TODAY}_before_${CUTOFF}.csv`;
 const EMAIL_FROM = 'emese@groenk.com';
 const REPORT_EMAILS = ['emese@groenk.com', 'controlling@groenk.com'];
 const EPS = 1e-6;
 
 const { AIRTABLE_TOKEN, RESEND_API_KEY, APPS_SCRIPT_URL, APPS_SCRIPT_SECRET } = process.env;
-const DRY_RUN = String(process.env.DRY_RUN || 'true').toLowerCase() !== 'false';
+const DRY_RUN = String(process.env.DRY_RUN || 'false').toLowerCase() === 'true';
 if (!AIRTABLE_TOKEN || !RESEND_API_KEY || !APPS_SCRIPT_URL || !APPS_SCRIPT_SECRET) {
   console.error('Missing env: AIRTABLE_TOKEN, RESEND_API_KEY, APPS_SCRIPT_URL, APPS_SCRIPT_SECRET');
   process.exit(1);
@@ -132,48 +131,34 @@ async function sendEmail(to, subject, text, attachments) {
   const r = await res.json(); if (!res.ok || r.error) throw new Error('Resend: ' + JSON.stringify(r).slice(0, 300));
 }
 
-function buildPlan(txns) {
-  // Group by product+location; rows that aren't exactly 1 product + 1 location are never touched.
+function buildPlan(txns, cutoff = CUTOFF) {
   const groups = {}; const untouchable = [];
   for (const t of txns) {
     const p = t.fields['Related Product'] || [], l = t.fields['Location'] || [];
     if (p.length !== 1 || l.length !== 1) { untouchable.push(t); continue; }
     (groups[`${p[0]}|${l[0]}`] = groups[`${p[0]}|${l[0]}`] || []).push(t);
   }
-
-  const before = {}, after = {}, plan = { deletes: [], updates: [], creates: [], log: [] };
+  const before = {}, after = {}, plan = { deletes: [], updates: [] };
   for (const [key, rows] of Object.entries(groups)) {
     before[key] = stockOf(rows);
     let lastCount = null;
     for (const t of rows) if (IS_MANUAL_COUNT(t) && (!lastCount || t.createdTime > lastCount.createdTime)) lastCount = t;
     const [productId, locationId] = key.split('|');
-    let D, simulated;
-    if (lastCount) {
-      D = rows.filter(t => t.id !== lastCount.id && t.createdTime < lastCount.createdTime && (t.fields['Date'] || '') < CUTOFF);
-      if (!D.length) { after[key] = before[key]; continue; }
-      const fold = D.reduce((s, t) => s + eff(t), 0);
-      // The count row is a Manual Adjustment, so its effect equals its Quantity.
-      const newQty = (Number(lastCount.fields['Quantity']) || 0) + fold;
-      const newNotes = `${lastCount.fields['Notes'] || 'Manual count'} | incl. opening balance of history before ${CUTOFF} (was ${lastCount.fields['Quantity']})`;
-      const changedCount = { ...lastCount, fields: { ...lastCount.fields, Quantity: newQty, Notes: newNotes } };
-      simulated = rows.filter(t => !D.includes(t) && t.id !== lastCount.id).concat([changedCount]);
-      plan.updates.push({ id: lastCount.id, fields: { Quantity: newQty, Notes: newNotes }, original: lastCount, productId, locationId });
-    } else {
-      D = rows.filter(t => (t.fields['Date'] || '') < CUTOFF);
-      if (!D.length) { after[key] = before[key]; continue; }
-      const total = D.reduce((s, t) => s + eff(t), 0);
-      const kept = rows.filter(t => !D.includes(t));
-      simulated = kept.slice();
-      if (Math.abs(total) > EPS) {
-        const fields = { 'Date': OPENING_DATE, 'Type': 'Manual Adjustment', 'Quantity': total, 'Related Product': [productId], 'Location': [locationId], 'Notes': `Opening balance — archived history before ${CUTOFF}`, 'Transaction Added By': 'Archive' };
-        simulated.push({ id: 'new', createdTime: '9999-12-31T00:00:00.000Z', fields });
-        plan.creates.push(fields);
-      }
-    }
+    // Rows that only matter through their sum: dated before the cutoff and (if
+    // there is a count) created before the latest count. The latest count
+    // itself is never part of it.
+    const D = rows.filter(t => (t.fields['Date'] || '') < cutoff && (!lastCount || (t.id !== lastCount.id && t.createdTime < lastCount.createdTime)));
+    if (D.length < 2) { after[key] = before[key]; continue; }   // nothing to gain
+    const total = D.reduce((s, t) => s + eff(t), 0);
+    // Keep the most recently created of them as the holder of the total.
+    const holder = D.reduce((a, b) => (b.createdTime > a.createdTime ? b : a));
+    const newFields = { 'Type': 'Manual Adjustment', 'Quantity': Math.round(total * 1e6) / 1e6, 'Notes': `Opening balance — archived history before ${cutoff}`, 'Waste Reason': null };
+    const changedHolder = { ...holder, fields: { ...holder.fields, ...newFields } };
+    const simulated = rows.filter(t => !D.includes(t)).concat([changedHolder]);
     after[key] = stockOf(simulated);
-    D.forEach(t => plan.deletes.push({ t, productId, locationId }));
+    plan.updates.push({ id: holder.id, fields: newFields, original: holder, productId, locationId });
+    D.filter(t => t.id !== holder.id).forEach(t => plan.deletes.push({ t, productId, locationId }));
   }
-
   return { groups, untouchable, before, after, plan };
 }
 
@@ -196,7 +181,9 @@ async function main() {
   // Safety 1: identical stock everywhere.
   const mismatches = Object.keys(before).filter(k => Math.abs(before[k] - after[k]) > EPS);
   if (mismatches.length) throw new Error(`Plan changes stock for ${mismatches.length} product/location pairs — aborted, nothing written:\n` + mismatches.slice(0, 30).map(k => `${pName[k.split('|')[0]]} @ ${lName[k.split('|')[1]]}: ${before[k]} -> ${after[k]}`).join('\n'));
-  console.log(`Plan OK: stock identical for all ${Object.keys(before).length} product/location pairs. Delete ${plan.deletes.length}, fold into ${plan.updates.length} count rows, create ${plan.creates.length} opening rows. Table: ${txns.length} -> ${txns.length - plan.deletes.length + plan.creates.length} rows.`);
+  console.log(`Plan OK: stock identical for all ${Object.keys(before).length} product/location pairs. Delete ${plan.deletes.length}, ${plan.updates.length} opening-balance rows. Table: ${txns.length} -> ${txns.length - plan.deletes.length} rows.`);
+
+  if (!plan.deletes.length) { console.log('Nothing to archive this week.'); return; }
 
   // Safety 2: archive + verify in Drive.
   const row = (action, t, extra = {}) => ({
@@ -204,7 +191,7 @@ async function main() {
     'Related Product': (t.fields['Related Product'] || []).map(id => pName[id] || id).join(' | '), 'Location': (t.fields['Location'] || []).map(id => lName[id] || id).join(' | '),
     'Notes': t.fields['Notes'], 'Transaction Added By': t.fields['Transaction Added By'], 'Waste Reason': t.fields['Waste Reason'], 'Stock Status After Transaction': t.fields['Stock Status After Transaction'], ...extra,
   });
-  const archiveRows = [...plan.deletes.map(d => row('DELETED', d.t)), ...plan.updates.map(u => row('COUNT QTY CHANGED', u.original, { 'New Quantity': u.fields.Quantity }))];
+  const archiveRows = [...plan.deletes.map(d => row('DELETED', d.t)), ...plan.updates.map(u => row('CHANGED TO OPENING BALANCE', u.original, { 'New Quantity': u.fields.Quantity }))];
   const csv = toCsv(archiveRows); const bytes = Buffer.from(csv, 'utf8'); const md5 = crypto.createHash('md5').update(bytes).digest('hex');
   const existing = (await appsScript({ action: 'find', name: ARCHIVE_NAME })).file;
   const up = (await appsScript({ action: 'upload', name: ARCHIVE_NAME, existingId: existing ? existing.id : null, contentBase64: bytes.toString('base64') })).file;
@@ -214,14 +201,13 @@ async function main() {
   if (!back.equals(bytes) || up.md5Checksum !== md5 || missing.length) throw new Error(`Drive archive verification FAILED (identical=${back.equals(bytes)}, md5 ${up.md5Checksum} vs ${md5}, missing ${missing.length}) — nothing written.`);
   console.log(`Archive ${ARCHIVE_NAME}: ${archiveRows.length} rows saved and verified in Drive.`);
 
-  const summary = `Inventory Transactions compaction — ${DRY_RUN ? 'DRY RUN (nothing changed)' : 'REAL RUN'}\n\n` +
-    `Rows in table: ${txns.length}\nTo delete (history before ${CUTOFF}): ${plan.deletes.length}\nCount rows with history folded in: ${plan.updates.length}\nNew opening-balance rows: ${plan.creates.length}\nRows after: ${txns.length - plan.deletes.length + plan.creates.length}\n\n` +
+  const summary = `Inventory Transactions weekly archive — ${DRY_RUN ? 'DRY RUN (nothing changed)' : 'REAL RUN'}\n\n` +
+    `Kept as individual rows: everything dated ${CUTOFF} or later\nRows in table: ${txns.length}\nDeleted (older history): ${plan.deletes.length}\nOpening-balance rows (one per product+location): ${plan.updates.length}\nRows after: ${txns.length - plan.deletes.length}\n\n` +
     `Stock check: identical for all ${Object.keys(before).length} product/location pairs.\nArchive in Drive (verified): ${ARCHIVE_NAME}\n`;
-  if (DRY_RUN) { await sendEmail(REPORT_EMAILS, 'Inventory compaction — DRY RUN plan', summary); console.log(summary); return; }
+  if (DRY_RUN) { await sendEmail(REPORT_EMAILS, `Inventory archive — DRY RUN plan (${TODAY})`, summary); console.log(summary); return; }
 
   // Real run: fold/create first, then delete.
   await patchMany(plan.updates.map(u => ({ id: u.id, fields: u.fields })));
-  await createMany(plan.creates);
   await deleteMany(plan.deletes.map(d => d.t.id));
 
   // Safety 4: re-read and verify.
@@ -234,19 +220,19 @@ async function main() {
   const bad = Object.keys(before).filter(k => {
     const now = g2[k] ? stockOf(g2[k]) : 0;
     if (Math.abs(now - before[k]) <= EPS) return false;
-    const concurrent = (g2[k] || []).filter(t => t.createdTime >= runStart && !(t.fields['Notes'] || '').startsWith('Opening balance'));
+    const concurrent = (g2[k] || []).filter(t => t.createdTime >= runStart && !String(t.fields['Notes'] || '').startsWith('Opening balance'));
     const expected = before[k] + concurrent.reduce((s2, t) => s2 + eff(t), 0);
     return Math.abs(now - expected) > EPS;
   });
   const report = summary + `\nAfter-run check: ${bad.length ? `⚠️ ${bad.length} pair(s) differ:\n` + bad.slice(0, 50).map(k => `${pName[k.split('|')[0]]} @ ${lName[k.split('|')[1]]}: expected ${before[k]}, now ${g2[k] ? stockOf(g2[k]) : 0}`).join('\n') : 'all stock levels identical ✅'}\nTable now: ${fresh.length} rows.`;
-  await sendEmail(REPORT_EMAILS, bad.length ? '⚠️ Inventory compaction — check needed' : 'Inventory compaction — done ✅', report);
+  await sendEmail(REPORT_EMAILS, bad.length ? '⚠️ Inventory archive — check needed' : `Inventory archive — done ✅ (${TODAY})`, report);
   console.log(report);
   if (bad.length) process.exitCode = 1;
 }
 
 if (require.main === module) main().catch(async e => {
   console.error(e);
-  try { await sendEmail(REPORT_EMAILS, '⚠️ Inventory compaction stopped', String(e && e.stack || e)); } catch (_) {}
+  try { await sendEmail(REPORT_EMAILS, '⚠️ Inventory archive stopped — nothing or only part changed', String(e && e.stack || e)); } catch (_) {}
   process.exit(1);
 });
 
