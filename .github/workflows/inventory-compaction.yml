@@ -1,9 +1,18 @@
-name: Inventory Compaction (one-off)
-# Manual only. Default is a DRY RUN: builds the plan, proves every stock level
-# stays identical, saves + verifies the archive CSV in Drive, emails the plan,
-# and changes NOTHING in Airtable. Choose dry_run = false for the real run
-# (refused between 01:00 and 08:00 UTC, the daily consumption window).
+name: Inventory Weekly Archive
+# Every Monday: keeps the current week + the last 2 completed weeks of
+# Inventory Transactions as individual rows; older history is collapsed into
+# one "Opening balance" row per product + location with exactly the same stock
+# effect, after the archive CSV has been saved and verified in the controlling
+# Drive folder. See inventory-compaction/inventory-compaction.js for the rules.
 on:
+  schedule:
+    # Monday 08:30 UTC = 10:30 Madrid (CEST): after the weekly reports
+    # (04:30/06:00 UTC), the Daily Sales archive (07:30 UTC) and the end of the
+    # daily consumption window (01:00-08:00 UTC).
+    - cron: '30 8 * * 1'
+    # Safety-net tick (GitHub can skip a new schedule's first window). Safe to
+    # run twice: the second run finds nothing left to archive.
+    - cron: '0 11 * * 1'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -12,7 +21,7 @@ on:
         options: ['true', 'false']
         default: 'true'
 jobs:
-  compact:
+  archive:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -22,11 +31,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Run compaction
+      - name: Run inventory archive
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
         run: npm start
