@@ -2,6 +2,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -225,6 +226,9 @@ const CATEGORY_ORDER = ['Meat & Fish', 'Fruit&Vegetable', 'Sauce', 'Bakery, past
 // still went into the order summary, so it could be ordered but not seen or
 // removed (Zanahoria mini at Frutas Daniel). This helper always shows every
 // category: known ones in CATEGORY_ORDER, any other ones after them.
+// ADDED 2026-09-27 (Emese): A-Z sorting for supplier and product pickers.
+const addDaysIso = (n) => { const d = new Date(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()) + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const byNameAZ = (a, b) => String(a.fields['Name'] || '').trim().localeCompare(String(b.fields['Name'] || '').trim(), 'es', { sensitivity: 'base' });
 function categoryGroups(items, sortFn) {
   const catOf = p => p.fields['Order Category'] || 'Other';
   const extra = [...new Set(items.map(catOf))].filter(c => !CATEGORY_ORDER.includes(c)).sort();
@@ -683,12 +687,14 @@ function NewOrderScreen({ user, api }) {
           api.getAll('Suppliers'), api.getAll('Products'), api.getAll('Recipes (BOM)'),
           loadRecentSales(api, locId), loadStockTxns(api, locId ? [locId] : null),
         ]);
-        setSuppliers(sups);
+        // CHANGED 2026-09-27 (Emese): suppliers in A-Z order.
+        const supsAZ = sups.slice().sort(byNameAZ);
+        setSuppliers(supsAZ);
         setProducts(prods.filter(p => p.fields['Active'] !== false));
         setRecipes(bom);
         setDailySales(sales);
         setInvTxns(txns);
-        if (sups.length) setSupplierId(sups[0].id);
+        if (supsAZ.length) setSupplierId(supsAZ[0].id);
       } catch(e) { alert('Error: ' + e.message); }
       finally { setLoading(false); }
     }
@@ -1713,23 +1719,34 @@ function WasteScreen({ user, api }) {
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [recent, setRecent] = useState([]);
+  const [recentDishIds, setRecentDishIds] = useState(null);
 
   async function load() {
     try {
-      const [p, s, t, mi, bom] = await Promise.all([
+      const [p, s, t, mi, bom, sales] = await Promise.all([
         api.getAll('Products'), api.getAll('Suppliers'),
         api.getAll('Inventory Transactions', {
           filter: andFormula(`{Type} = 'Waste'`, LOCATION_FORMULA(LOCATION_IDS[user.restaurant])),
           sort: [{ field: 'Date', direction: 'desc' }], max: 8,
         }),
         api.getAll('Menu Items'), api.getAll('Recipes (BOM)'),
+        loadRecentSales(api, LOCATION_IDS[user.restaurant]),
       ]);
-      const active = p.filter(x => x.fields['Active'] !== false);
+      // CHANGED 2026-09-27 (Emese): suppliers A-Z, and products A-Z within each supplier.
+      const active = p.filter(x => x.fields['Active'] !== false).sort(byNameAZ);
+      const suppliersAZ = s.slice().sort(byNameAZ);
       setProducts(active);
-      setSuppliers(s);
+      setSuppliers(suppliersAZ);
       setMenuItems(mi);
       setRecipes(bom);
-      if (active.length) setProductId(active[0].id);
+      // Only dishes that appeared in this restaurant's Daily Sales in the last 14 days —
+      // keeps old / duplicate menu items (e.g. "Fritas" vs "French fries") out of the list.
+      const since = addDaysIso(-14);
+      setRecentDishIds(new Set(sales.filter(x => (x.fields['Date'] || '') >= since).flatMap(x => x.fields['Menu Item'] || [])));
+      // Pre-select the first product as it appears in the (A-Z) list.
+      const firstSup = suppliersAZ.find(sup => active.some(x => (x.fields['Supplier'] || []).includes(sup.id)));
+      const firstProd = firstSup ? active.find(x => (x.fields['Supplier'] || []).includes(firstSup.id)) : active[0];
+      if (firstProd) setProductId(firstProd.id);
       const locationId = LOCATION_IDS[user.restaurant];
       setRecent(t.filter(x => x.fields['Type'] === 'Waste' && (x.fields['Location'] || []).includes(locationId))
         .sort((a,b) => (b.fields['Date'] || '').localeCompare(a.fields['Date'] || '')).slice(0, 8));
@@ -1769,9 +1786,10 @@ function WasteScreen({ user, api }) {
   const dishOptions = React.useMemo(() => {
     return menuItems
       .filter(m => (bomByMenuItem[m.id] || []).some(c => activeProductIds.has(c.productId)))
+      .filter(m => !recentDishIds || !recentDishIds.size || recentDishIds.has(m.id))
       .map(m => ({ id: m.id, name: m.fields['Name'] || '' }))
       .sort((a, b) => a.name.localeCompare(b.name, 'hu'));
-  }, [menuItems, bomByMenuItem, activeProductIds]);
+  }, [menuItems, bomByMenuItem, activeProductIds, recentDishIds]);
   const menuItemNameById = React.useMemo(() => Object.fromEntries(menuItems.map(m => [m.id, m.fields['Name'] || ''])), [menuItems]);
 
   async function submitDishWaste() {
@@ -1798,7 +1816,7 @@ function WasteScreen({ user, api }) {
       }
       await Promise.all(writes.map(fields => api.create('Inventory Transactions', fields)));
       if (skipped.length) {
-        alert(`Mentve, de ${skipped.length} alapanyagot nem sikerült átváltani (hiányzó mértékegység-adat) — ezeket kézzel is rögzítheted a "Nyers alapanyag" módban.`);
+        alert(`Mentve, de ${skipped.length} alapanyagot nem sikerült átváltani (hiányzó mértékegység-adat) — ezeket kézzel is rögzítheted az "Ingredients" módban.`);
       }
       setQty(''); setNotes(''); setReason(WASTE_REASONS[0]);
       await load();
@@ -1848,12 +1866,12 @@ function WasteScreen({ user, api }) {
           <button
             style={{ flex: 1, background: wasteMode === 'product' ? 'var(--petrol)' : '#fff', color: wasteMode === 'product' ? '#fff' : 'var(--petrol)', borderColor: 'var(--border-strong)' }}
             onClick={() => setWasteMode('product')}>
-            Nyers alapanyag
+            Ingredients
           </button>
           <button
             style={{ flex: 1, background: wasteMode === 'dish' ? 'var(--petrol)' : '#fff', color: wasteMode === 'dish' ? '#fff' : 'var(--petrol)', borderColor: 'var(--border-strong)' }}
             onClick={() => setWasteMode('dish')}>
-            Étteremi fogás
+            Restaurant dishes
           </button>
         </div>
 
