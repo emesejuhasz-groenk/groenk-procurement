@@ -112,11 +112,23 @@ async function deleteMany(ids) {
 }
 
 // ---------- Drive via the existing Apps Script ----------
+// CHANGED 2026-09-28: retries. On 2026-09-28 one call got a transient HTTP 404
+// page from Google instead of the script's JSON; the next run worked fine.
 async function appsScript(payload) {
-  const res = await fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ ...payload, secret: APPS_SCRIPT_SECRET }), redirect: 'follow' });
-  const text = await res.text(); let d;
-  try { d = JSON.parse(text); } catch (_) { throw new Error(`Apps Script non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`); }
-  if (!d.ok) throw new Error(`Apps Script: ${d.error}`); return d;
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ ...payload, secret: APPS_SCRIPT_SECRET }), redirect: 'follow' });
+      const text = await res.text(); let d;
+      try { d = JSON.parse(text); } catch (_) { throw new Error(`Apps Script non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`); }
+      if (!d.ok) throw new Error(`Apps Script: ${d.error}`); return d;
+    } catch (e) {
+      lastErr = e;
+      if (/unauthorized/i.test(e.message)) throw e;
+      await sleep(5000 * (attempt + 1));
+    }
+  }
+  throw lastErr;
 }
 
 // ---------- CSV ----------
@@ -205,6 +217,18 @@ async function main() {
     `Kept as individual rows: everything dated ${CUTOFF} or later\nRows in table: ${txns.length}\nDeleted (older history): ${plan.deletes.length}\nOpening-balance rows (one per product+location): ${plan.updates.length}\nRows after: ${txns.length - plan.deletes.length}\n\n` +
     `Stock check: identical for all ${Object.keys(before).length} product/location pairs.\nArchive in Drive (verified): ${ARCHIVE_NAME}\n`;
   if (DRY_RUN) { await sendEmail(REPORT_EMAILS, `Inventory archive — DRY RUN plan (${TODAY})`, summary); console.log(summary); return; }
+
+  // ADDED 2026-09-28: GitHub can start scheduled runs hours late, possibly while
+  // staff are entering counts. If ANY row was added since the plan was built,
+  // stop before writing anything; the next run (safety-net tick / next Monday)
+  // simply picks it up.
+  const recheck = await getAll();
+  if (recheck.length !== txns.length || recheck.some(t => t.createdTime >= RUN_STARTED_AT)) {
+    const msg = `Ledger changed while planning (${txns.length} -> ${recheck.length} rows; someone is probably entering data). Nothing was changed — will retry on the next scheduled run.`;
+    console.log(msg);
+    await sendEmail(REPORT_EMAILS, 'Inventory archive — postponed (nothing changed)', msg);
+    return;
+  }
 
   // Real run: fold/create first, then delete.
   await patchMany(plan.updates.map(u => ({ id: u.id, fields: u.fields })));
