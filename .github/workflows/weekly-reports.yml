@@ -1,19 +1,24 @@
 name: Weekly Sales & Production Kitchen Reports
 on:
-  schedule:
-    # Primary tick: Monday 04:30 UTC = 05:30 Madrid (CEST, summer) / 06:30 Madrid
-    # (CET, winter) — safely before the 07:00 Madrid target either way.
-    - cron: '30 4 * * 1'
-    # SAFETY NET, added 2026-09-14 after the first scheduled run silently never
-    # fired at all (confirmed via the Actions history — every run that week was
-    # workflow_dispatch, none was schedule). This matches the exact same GitHub
-    # Actions quirk already documented in production-kitchen-order.js: a
-    # newly-created or just-changed schedule trigger can silently skip its very
-    # first eligible window. A second, later tick the same morning costs nothing
-    # (main() is idempotent — it always recomputes the same "last completed week"
-    # regardless of which tick runs it) and means a single missed primary window
-    # doesn't turn into a whole missed week.
-    - cron: '0 6 * * 1'
+  # CHANGED 2026-09-29: no GitHub schedule any more. GitHub's scheduler started runs
+  # hours late (or twice), which sent reports late or duplicated. This workflow is now
+  # started on time by the Cloudflare Worker "groenk-scheduler" (workflow_dispatch),
+  # which also waits until the POS sales are in Airtable. See cloudflare/worker.js.
+  # Manual "Run workflow" still works as before.
+  # schedule:
+  #   # Primary tick: Monday 04:30 UTC = 05:30 Madrid (CEST, summer) / 06:30 Madrid
+  #   # (CET, winter) — safely before the 07:00 Madrid target either way.
+  #   - cron: '30 4 * * 1'
+  #   # SAFETY NET, added 2026-09-14 after the first scheduled run silently never
+  #   # fired at all (confirmed via the Actions history — every run that week was
+  #   # workflow_dispatch, none was schedule). This matches the exact same GitHub
+  #   # Actions quirk already documented in production-kitchen-order.js: a
+  #   # newly-created or just-changed schedule trigger can silently skip its very
+  #   # first eligible window. A second, later tick the same morning costs nothing
+  #   # (main() is idempotent — it always recomputes the same "last completed week"
+  #   # regardless of which tick runs it) and means a single missed primary window
+  #   # doesn't turn into a whole missed week.
+  #   - cron: '0 6 * * 1'
   workflow_dispatch:
     inputs:
       note:
