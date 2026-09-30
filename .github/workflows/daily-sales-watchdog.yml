@@ -1,11 +1,16 @@
 name: Daily Sales Watchdog
 on:
-  schedule:
-    # 05:15 UTC = 06:15 Madrid (CEST) / 07:15 Madrid (CET) — after both Cowork
-    # import tasks (04:30 and 06:00 Madrid) should have finished, and before the
-    # 07:00 Madrid Production Kitchen order, so a gap is caught before it feeds
-    # into that order rather than only being noticed after the fact.
-    - cron: '15 5 * * *'
+  # CHANGED 2026-09-29: no GitHub schedule any more. GitHub's scheduler started runs
+  # hours late (or twice), which sent reports late or duplicated. This workflow is now
+  # started on time by the Cloudflare Worker "groenk-scheduler" (workflow_dispatch),
+  # which also waits until the POS sales are in Airtable. See cloudflare/worker.js.
+  # Manual "Run workflow" still works as before.
+  # schedule:
+  #   # 05:15 UTC = 06:15 Madrid (CEST) / 07:15 Madrid (CET) — after both Cowork
+  #   # import tasks (04:30 and 06:00 Madrid) should have finished, and before the
+  #   # 07:00 Madrid Production Kitchen order, so a gap is caught before it feeds
+  #   # into that order rather than only being noticed after the fact.
+  #   - cron: '15 5 * * *'
   workflow_dispatch: {}
 jobs:
   check-daily-sales:
